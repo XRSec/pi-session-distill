@@ -1,4 +1,4 @@
-import * as crypto from "node:crypto";
+import * as crypto from "crypto";
 
 export type SourceView = "effective-context" | "active-branch";
 export type VisibleKind = "user" | "assistant" | "tool" | "checkpoint" | "break";

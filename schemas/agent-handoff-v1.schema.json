@@ -265,10 +265,11 @@
     "action": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "priority", "status", "preconditions", "executionSummary", "expectedResult", "verification", "sideEffect", "approvalRequired", "evidenceRefs"],
+      "required": ["id", "priority", "status", "evidenceRefs"],
       "properties": {
         "id": {"type": "string"},
         "title": {"type": "string"},
+        "statement": {"type": "string"},
         "priority": {"enum": ["P0", "P1", "P2", "P3"]},
         "status": {"enum": ["ready", "blocked", "optional", "done"]},
         "preconditions": {"type": "array", "items": {"type": "string"}},

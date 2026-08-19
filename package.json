@@ -1,11 +1,10 @@
 {
   "name": "pi-session-cleanup",
-  "version": "4.0.0",
+  "version": "4.3.0",
   "private": true,
   "type": "module",
   "description": "Agent State Handoff cleanup, merge, verification, and repeatable re-cleaning for Pi sessions",
   "scripts": {
-    "test": "node --experimental-strip-types --test test/core.test.ts test/textual.test.ts test/lifecycle.test.ts test/handoff.test.ts",
     "analyze": "node --experimental-strip-types scripts/analyze-session.ts"
   },
   "peerDependencies": {

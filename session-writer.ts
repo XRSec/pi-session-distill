@@ -1,4 +1,4 @@
-import * as crypto from "node:crypto";
+import * as crypto from "crypto";
 import type {SourceRef} from "./core.ts";
 import type {CleanupDiagnostics, CleanupPolicy, CleanupResult, StoredCleanIr} from "./textual.ts";
 import type {AgentHandoffReport} from "./handoff.ts";
@@ -108,6 +108,85 @@ export function verifyCleanSessionLines(lines: Array<Record<string, unknown>>, e
     if (lines.filter((line) => line.type === "custom" && line.customType === "cleanup_manifest").length !== 1) throw new Error("写后验证失败: cleanup_manifest 必须恰好一次");
     if (lines.filter((line) => line.type === "custom" && line.customType === "cleanup_ir").length !== 1) throw new Error("写后验证失败: cleanup_ir 必须恰好一次");
 
+    let parentId: string | null = null;
+    for (const line of lines.slice(1)) {
+        if (line.parentId !== parentId) throw new Error("写后验证失败: 父链不可达");
+        if (typeof line.id !== "string" || !line.id) throw new Error("写后验证失败: entry id 无效");
+        parentId = line.id;
+    }
+}
+
+
+export interface ChunkPartItem {
+    sourceId: string;
+    chunkIndex: number;
+    totalChunks: number;
+    partIndex: number;
+    text: string;
+}
+
+/**
+ * 新 --textual 方案:跳过 LLM,把每个 chunk 的每个 chunkPart 作为独立 user message 段写入新会话。
+ * 退化 stutter 消息已在生成 chunkPart 前过滤。remnic excerpt 作为独立 part 自然保留。
+ */
+export function buildChunkPartsSessionLines(options: {
+    sessionId: string;
+    cwd: string;
+    title: string;
+    items: ChunkPartItem[];
+    imports: SourceRef[];
+    manifest: TextualCleanupManifest;
+    timestamp?: string;
+}): Array<Record<string, unknown>> {
+    const timestamp = options.timestamp ?? new Date().toISOString();
+    const header = {type: "session", version: 3, id: options.sessionId, timestamp, cwd: options.cwd};
+    const lines: Array<Record<string, unknown>> = [header];
+    let parentId: string | null = null;
+    for (const [index, item] of options.items.entries()) {
+        const id = entryId();
+        const body = `[chunkPart ${item.chunkIndex + 1}/${item.totalChunks} · ${item.partIndex + 1} | source=${item.sourceId}]
+${item.text}`;
+        lines.push({
+            type: "message",
+            id,
+            parentId,
+            timestamp,
+            message: {
+                role: "user",
+                content: [{type: "text", text: body}],
+                timestamp: Date.now() + index, // 区分同秒多条
+            },
+        });
+        parentId = id;
+    }
+    const infoId = entryId();
+    lines.push({type: "session_info", id: infoId, parentId, timestamp, name: options.title});
+    parentId = infoId;
+    for (const ref of options.imports) {
+        const id = entryId();
+        lines.push({type: "custom", id, parentId, timestamp, customType: "import_source", data: ref});
+        parentId = id;
+    }
+    const manifestId = entryId();
+    lines.push({type: "custom", id: manifestId, parentId, timestamp, customType: "cleanup_manifest", data: options.manifest});
+    return lines;
+}
+
+export function verifyChunkPartsSessionLines(lines: Array<Record<string, unknown>>, expectedItemCount: number, expectedSessionId: string, expectedManifestHash: string): void {
+    const header = lines[0];
+    if (!header || header.type !== "session" || header.version !== 3 || header.id !== expectedSessionId) throw new Error("写后验证失败: session header 无效");
+    const messages = lines.filter((line) => line.type === "message" && line.message?.role === "user");
+    if (messages.length !== expectedItemCount) throw new Error(`写后验证失败: user 段数 ${messages.length} ≠ 预期 ${expectedItemCount}`);
+    for (const [index, line] of messages.entries()) {
+        const content = line.message?.content;
+        const text = Array.isArray(content) && content[0] && typeof content[0] === "object" ? (content[0] as Record<string, unknown>).text : undefined;
+        if (typeof text !== "string" || text.length === 0) throw new Error(`写后验证失败: user 段 ${index} 无正文`);
+        if (!text.startsWith("[chunkPart ")) throw new Error(`写后验证失败: user 段 ${index} 缺 [chunkPart 头`);
+    }
+    const manifests = lines.filter((line) => line.type === "custom" && line.customType === "cleanup_manifest");
+    if (manifests.length !== 1) throw new Error("写后验证失败: cleanup_manifest 必须恰好一次");
+    const data = manifests[0].data as Record<string, unknown> | undefined;
+    if (!data || data.outputContentHash !== expectedManifestHash) throw new Error("写后验证失败: cleanup_manifest outputContentHash 不匹配");
     let parentId: string | null = null;
     for (const line of lines.slice(1)) {
         if (line.parentId !== parentId) throw new Error("写后验证失败: 父链不可达");

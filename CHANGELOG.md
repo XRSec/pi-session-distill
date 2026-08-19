@@ -1,5 +1,35 @@
 # Changelog
 
+## 4.3.0 — Native single-session routing and verified source archive
+
+- `/cleanup this` 在当前会话原地追加 Pi native `CompactionEntry`。
+- `/cleanup <单个 session-id>` 使用 Pi 官方 compaction preparation/cut point，在冻结和源一致性检查后原地追加并回读验证。
+- `/cleanup <多个明确 session-id>` 发布并回读验证 handoff 后，将未变化源会话原子移动到权限受限的 `/tmp` 归档目录；不永久删除。
+- 无参数交互选择不自动归档；`--textual` 始终只读。
+- 默认 handoff 输入改用冻结 active branch 与 Pi 官方 serialization；旧 Result-First 行为仅作为历史版本记录。
+
+## 4.1.0 — Result-First input reduction
+
+### Result-First retrieval
+
+- 默认 handoff/capsule 不再把完整 User → Assistant thinking/tool → Tool output 流水账送给清洗模型。
+- 以“工作事务”的**最终 Assistant 结果**作为第一数据源；只要结果完整，原始 User 请求和 Tool output 均不重复输入。
+- 只有事务中断、没有最终结果时，才降级保留最后的 Assistant 状态和少量结果型 Tool 证据。
+- 只有上述证据仍无法独立解释事务时，才回看 User 请求；`继续`、`开始`、进度催促等不作为独立知识输入。
+- 连续 `继续`/进度催促会并入尚未完成的上一工作事务，避免把一次长任务拆成大量伪会话块。
+- `read/search/grep/find` 等发现型工具默认不作为 durable result；验证、修改、错误、后台任务状态等结果型工具才可进入 fallback。
+
+### Context pressure
+
+- Tool fallback 文本有确定性长度上限，保留头尾而不是整段日志/源码。
+- 日志新增 rawMessages / turns / selectedMessages / droppedMessages / selectedChars / reductionPct 等 Result-First 指标。
+- Handoff extractor prompt 明确输入已是 result-first records，不再要求模型重建缺失的原始问题。
+
+### Compatibility
+
+- 旧 cleanup 会话若只有 `compaction.summary`、没有普通 message，默认 handoff 会在无其他结果记录时读取最新 summary 作为 legacy fallback。
+- snapshot-first、secret redaction、canonical handoff、verifier 与原子发布机制保持不变。
+
 ## 4.0.0 — Agent State Handoff redesign
 
 ### Breaking/default behavior
@@ -60,3 +90,10 @@
 - live source changes after snapshot only warn，不阻断 switch。
 - `switchSession(..., {withSession})` fresh context lifecycle 修复。
 - source session read-only / atomic 0600 output / 0700 backup directories。
+
+## 4.2.0 - 2026-08-19
+
+- Fixed result-first evidence loss in long unfinished tool turns: cleanup now preserves a bounded chronological set of durable Assistant milestones instead of only the latest status.
+- Strengthened extraction/consolidation/verifier prompts against resolved-state regression (resolved blockers, verified probes, explicit path supersession, and stale quantitative measurements).
+- Added Grok regression coverage for mail auth `401 -> 200`, live-probe completion, `Grok/cpa_proxy_state.json` authority, and node-health `67/215 -> 91/215 -> 191/215`.
+- Updated handoff prompt version to `handoff-result-first-v1.2.0`.
