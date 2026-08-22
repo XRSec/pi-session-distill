@@ -1,13 +1,37 @@
 {
-  "name": "pi-session-cleanup",
+  "name": "@xrsec/session-cleanup",
   "version": "4.3.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "description": "Agent State Handoff cleanup, merge, verification, and repeatable re-cleaning for Pi sessions",
+  "keywords": ["pi-package", "pi-extension", "pi", "session", "compaction", "handoff"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XRSec/session-cleanup.git"
+  },
   "scripts": {
     "analyze": "node --experimental-strip-types scripts/analyze-session.ts"
   },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
-  }
+  },
+  "files": [
+    "index.ts",
+    "core.ts",
+    "handoff.ts",
+    "native-compaction.ts",
+    "session-writer.ts",
+    "textual.ts",
+    "standalone.ts",
+    "schemas",
+    "types",
+    "scripts",
+    "README.md",
+    "REQUIREMENTS.md",
+    "CHANGELOG.md"
+  ]
 }

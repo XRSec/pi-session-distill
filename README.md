@@ -41,13 +41,21 @@
 
 ## 安装
 
-将 ZIP 解压为以下目录：
+推荐方式(需要已安装 Pi):
+
+```text
+pi install git:github.com/XRSec/session-cleanup
+# 或从 npm
+pi install npm:@xrsec/session-cleanup
+```
+
+也可以将 ZIP 解压为以下目录:
 
 ```text
 ~/.pi/agent/extensions/session-cleanup/
 ```
 
-目录中应直接包含 `index.ts` 和 `package.json`，不要额外嵌套一层同名目录。重启 Pi 后运行：
+目录中应直接包含 `index.ts` 和 `package.json`,不要额外嵌套一层同名目录。重启 Pi 后运行:
 
 ```text
 /cleanup this
