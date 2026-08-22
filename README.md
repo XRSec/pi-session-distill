@@ -1,4 +1,4 @@
-# Pi Session Cleanup
+# Pi Session Distill
 
 为 Pi 会话提供两种明确行为：单会话原地 native compaction，以及多会话 Agent State Handoff 聚合。
 
@@ -8,9 +8,9 @@
 |---|---|---|
 | `/cleanup this` | 在当前会话原地追加 native `CompactionEntry` | 保留 |
 | `/cleanup <session-id>` | 在指定历史会话原地追加 native `CompactionEntry` | 保留 |
-| `/cleanup <id> <id> [...]` | 生成并验证一个新的聚合 handoff session | 成功发布且源未变化后，移动到 `/tmp/session-cleanup-sources-<run-id>/` |
+| `/cleanup <id> <id> [...]` | 生成并验证一个新的聚合 handoff session | 成功发布且源未变化后，移动到 `/tmp/session-distill-sources-<run-id>/` |
 | `/cleanup` | 交互选择并生成 handoff | 始终保留 |
-| 任意 `--textual` 调用 | 仅写入 `/tmp/session-cleanup-textual-*.md` | 始终保留且不修改 |
+| 任意 `--textual` 调用 | 仅写入 `/tmp/session-distill-textual-*.md` | 始终保留且不修改 |
 
 `/cleanup this` 使用 Pi 实际的 `CompactionPreparation`。单个明确 ID 使用 Pi 官方 `prepareCompaction` 对冻结副本计算 cut point，再将经过回读验证的 `CompactionEntry` 追加到原会话；写入前会创建 `0700/0600` 安全快照。
 
@@ -18,7 +18,7 @@
 
 ## 接管 Pi 压缩事件
 
-无需额外配置。扩展加载后会自动注册 Pi 的 `session_before_compact` hook，点击压缩、执行 `/compact` 或触发自动压缩时都会由 `session-cleanup` 接管摘要生成；失败时回退到 Pi 原生摘要。这些入口继续使用 Pi 当前的压缩设置；显式执行 `/cleanup this` 时会进行 full-span compaction，将近期原文保留窗口设为 `0`，只保留 Pi 要求的最小结构边界。
+无需额外配置。扩展加载后会自动注册 Pi 的 `session_before_compact` hook，点击压缩、执行 `/compact` 或触发自动压缩时都会由 `session-distill` 接管摘要生成；失败时回退到 Pi 原生摘要。这些入口继续使用 Pi 当前的压缩设置；显式执行 `/cleanup this` 时会进行 full-span compaction，将近期原文保留窗口设为 `0`，只保留 Pi 要求的最小结构边界。
 
 ## Textual 检查
 
@@ -44,15 +44,15 @@
 推荐方式(需要已安装 Pi):
 
 ```text
-pi install git:github.com/XRSec/session-cleanup
+pi install git:github.com/XRSec/pi-session-distill
 # 或从 npm
-pi install npm:@xrsec/session-cleanup
+pi install npm:pi-session-distill
 ```
 
 也可以将 ZIP 解压为以下目录:
 
 ```text
-~/.pi/agent/extensions/session-cleanup/
+~/.pi/agent/extensions/pi-session-distill/
 ```
 
 目录中应直接包含 `index.ts` 和 `package.json`,不要额外嵌套一层同名目录。重启 Pi 后运行:

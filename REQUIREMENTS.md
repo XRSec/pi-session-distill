@@ -1,8 +1,8 @@
-# Session Cleanup 需求
+# Pi Session Distill 需求
 
 ## 目标
 
-`session-cleanup` 提供：
+`session-distill` 提供：
 
 1. 当前或指定单个会话的 Pi native compaction checkpoint；
 2. 多个明确指定会话的 Agent State Handoff 聚合；
@@ -57,7 +57,7 @@
 1. handoff 质量门禁、写入和回读必须全部成功；
 2. 每个原 source 必须仍与生成前冻结快照的 hash 和字节数一致；任一预检失败时不移动任何源；
 3. 当前活动 session 不得作为归档源；
-4. 所有源文件必须原子移动到 `/tmp/session-cleanup-sources-<run-id>/`，不得永久删除；
+4. 所有源文件必须原子移动到 `/tmp/session-distill-sources-<run-id>/`，不得永久删除；
 5. 归档目录权限 `0700`，源文件与 `manifest.json` 权限 `0600`；
 6. manifest 必须记录 output path、原路径、归档路径、hash、字节数和逐文件状态；中途异常必须如实记录 partial 状态；
 7. `--textual` 和无 ID 的交互选择永不归档源会话。

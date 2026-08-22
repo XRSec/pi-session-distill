@@ -1435,7 +1435,7 @@ export function assembleHandoffReport(options: {
                 {name: "deterministic-markdown-renderer", version: HANDOFF_RENDERER_VERSION},
             ],
             mergePolicy: "canonical-ledger merge; explicit supersession; verified state > explicit user constraint > tool evidence > assistant report > inference",
-            generatedBy: {agent: "@xrsec/session-cleanup", model: options.model},
+            generatedBy: {agent: "pi-session-distill", model: options.model},
         },
         security: {
             classification: "internal",

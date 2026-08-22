@@ -1,14 +1,14 @@
 {
-  "name": "@xrsec/session-cleanup",
+  "name": "pi-session-distill",
   "version": "4.3.0",
   "private": false,
   "type": "module",
   "description": "Agent State Handoff cleanup, merge, verification, and repeatable re-cleaning for Pi sessions",
-  "keywords": ["pi-package", "pi-extension", "pi", "session", "compaction", "handoff"],
+  "keywords": ["pi-package", "pi-extension", "pi", "session", "compaction", "handoff", "distill", "merge"],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/XRSec/session-cleanup.git"
+    "url": "git+https://github.com/XRSec/pi-session-distill.git"
   },
   "scripts": {
     "analyze": "node --experimental-strip-types scripts/analyze-session.ts"

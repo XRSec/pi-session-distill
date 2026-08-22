@@ -778,7 +778,7 @@ export function validateCapsuleResponse(raw: string, stopReason: string, expecte
         const body = rawLines.slice(start + 1, end === -1 ? undefined : end).join("\n").trim();
         if (!body) throw new Error(`章节为空: ${heading}`);
     }
-    const provenanceMarkers = /(?:session-cleanup-backups|cleanup_manifest|coveredSourceIds|fact-ledger|##\s+Source Coverage|\.pi\/agent\/sessions\/)/i;
+    const provenanceMarkers = /(?:session-distill-backups|cleanup_manifest|coveredSourceIds|fact-ledger|##\s+Source Coverage|\.pi\/agent\/sessions\/)/i;
     if (provenanceMarkers.test(object.markdown) || expectedSourceIds.some((id) => object.markdown.includes(id))) throw new Error("来源追溯细节不得占用知识胶囊正文");
     const paragraphs = object.markdown.split(/\n\s*\n/).map((paragraph) => paragraph.trim().replace(/\s+/g, " ")).filter((paragraph) => paragraph.length >= 80 && !/^#{1,6}\s/.test(paragraph));
     if (new Set(paragraphs).size !== paragraphs.length) throw new Error("正文包含重复段落");
