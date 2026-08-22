@@ -8,17 +8,36 @@
 |---|---|---|
 | `/cleanup this` | 在当前会话原地追加 native `CompactionEntry` | 保留 |
 | `/cleanup <session-id>` | 在指定历史会话原地追加 native `CompactionEntry` | 保留 |
-| `/cleanup <id> <id> [...]` | 生成并验证一个新的聚合 handoff session | 成功发布且源未变化后，移动到 `/tmp/session-distill-sources-<run-id>/` |
+| `/cleanup <id> <id> [...]` | 生成并验证一个新的聚合 handoff session，并嵌入 hidden 完整历史 | 成功发布且源未变化后，移动到 `/tmp/session-distill-sources-<run-id>/` |
 | `/cleanup` | 交互选择并生成 handoff | 始终保留 |
 | 任意 `--textual` 调用 | 仅写入 `/tmp/session-distill-textual-*.md` | 始终保留且不修改 |
 
 `/cleanup this` 使用 Pi 实际的 `CompactionPreparation`。单个明确 ID 使用 Pi 官方 `prepareCompaction` 对冻结副本计算 cut point，再将经过回读验证的 `CompactionEntry` 追加到原会话；写入前会创建 `0700/0600` 安全快照。
 
-多个明确 ID 使用冻结 active branch、当前模型、canonical handoff 和质量 verifier。只有质量门禁、原子写入、回读以及全部源文件一致性检查都通过后，才会原子移动源文件。归档目录为 `0700`，文件和 `manifest.json` 为 `0600`；不永久删除源文件。失败时不发布无效结果，也不会把尚未移动的源文件标记为成功。
+多个明确 ID 使用冻结 active branch、当前模型、canonical handoff 和质量 verifier。聚合产物还会以 Pi `custom` entries 嵌入每个来源的完整 session tree 原始字节和跨来源时间线索引；这些 entries 不显示、也不进入 LLM context。只有质量门禁、hidden history 校验、原子写入、回读以及全部源文件一致性检查都通过后，才会原子移动源文件。归档目录为 `0700`，文件和 `manifest.json` 为 `0600`；不永久删除源文件。失败时不发布无效结果，也不会把尚未移动的源文件标记为成功。
 
 ## 接管 Pi 压缩事件
 
 无需额外配置。扩展加载后会自动注册 Pi 的 `session_before_compact` hook，点击压缩、执行 `/compact` 或触发自动压缩时都会由 `session-distill` 接管摘要生成；失败时回退到 Pi 原生摘要。这些入口继续使用 Pi 当前的压缩设置；显式执行 `/cleanup this` 时会进行 full-span compaction，将近期原文保留窗口设为 `0`，只保留 Pi 要求的最小结构边界。
+
+## 命令行(非交互)用法
+
+在脚本或 CI 中,可用 `pi` 的非交互模式直接触发 `/cleanup`,结果原文直接打印到 stdout。两个常用形态:
+
+```bash
+# 打开指定会话,对其执行 /cleanup this(单会话原地 native compaction)
+pi --session 15e1ab4f-2b8d-47c2-a1c0-f0097e18e110 "/cleanup this" --print
+
+# ephemeral 模式(不创建/保存临时会话),对指定历史会话执行 /cleanup <session-id>
+pi --no-session "/cleanup 15e1ab4f-2b8d-47c2-a1c0-f0097e18e110" --print
+```
+
+两者都会把命令输出打印到 stdout 后退出;区别在于:
+
+- `--session <id>`:载入目标会话,`/cleanup this` 是针对**当前会话**(即该 ID)原地追加 native `CompactionEntry`。
+- `--no-session`:启动 ephemeral 临时会话,`/cleanup <session-id>` 是针对**指定历史会话**执行同一原地 compaction,不会保留这次的临时会话。
+
+单会话清理(`/cleanup this` 或 `/cleanup <session-id>`)适合这种非交互调用;多会话聚合 handoff 需要交互确认/移动源文件,建议在交互式 TUI 中使用(或先用 `--textual` 离线检查)。
 
 ## Textual 检查
 
@@ -38,6 +57,16 @@
 - 在交给模型前脱敏，并把源内容视为不可信数据；
 - 生成 deterministic Markdown、hidden canonical handoff 和来源 manifest；
 - verifier 未通过时拒绝发布，不降级为低质量 textual 结果。
+
+## Hidden 完整历史
+
+任何包含至少两个来源 session 的聚合产物包含：
+
+- `cleanup_history_manifest`：归档范围、来源哈希、记录数和全局时间线哈希；
+- `cleanup_history_source_chunk`：每个来源 session 文件的原始字节，经 `gzip+base64` 分块；
+- `cleanup_history_timeline_chunk`：整个 session tree 的记录索引，按 `timestamp → sourceIndex → lineIndex` 稳定排序，并记录每一原始 JSONL 行的 SHA-256。
+
+写入前后都会重新拼接、解压并核对来源字节数、来源 SHA-256、压缩数据 SHA-256、时间线顺序、时间线哈希、行引用和输出父链。该历史不会进入模型上下文，但它是**原样本地归档**：源会话中的 Token、Cookie、thinking、工具详情、图片/base64 等也会保留。聚合 session 因此必须继续按敏感文件管理，并保持 `0600` 权限。
 
 ## 安装
 
