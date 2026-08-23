@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import {documentFromEntries, type CleanupPolicy, type CleanDocument} from "./textual.ts";
+import {type CleanDocument, type CleanupPolicy, documentFromEntries} from "./textual.ts";
 
 export interface ParsedPiSession {
     header: Record<string, unknown>;
@@ -12,8 +12,11 @@ export function parsePiJsonl(text: string): ParsedPiSession {
     const lines = text.split("\n").filter((line) => line.trim());
     if (lines.length === 0) throw new Error("空 JSONL");
     const records = lines.map((line, index) => {
-        try { return JSON.parse(line) as Record<string, unknown>; }
-        catch { throw new Error(`第 ${index + 1} 行不是有效 JSON`); }
+        try {
+            return JSON.parse(line) as Record<string, unknown>;
+        } catch {
+            throw new Error(`第 ${index + 1} 行不是有效 JSON`);
+        }
     });
     const header = records[0];
     if (header.type !== "session") throw new Error("第一条记录不是 session header");

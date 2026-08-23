@@ -6,23 +6,31 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-    atomicWrite0600,
     assertFactLedgerDomainsPreserved,
+    atomicReplace0600,
+    atomicWrite0600,
+    type Capsule,
+    type CapsuleReview,
     capsuleReviewPasses,
     chunkWholeBlocks,
     collectImportSources,
     createSnapshot,
+    type FactLedger,
     firstConversationExcerpt,
-    isDegenerateAssistant,
+    type InputStats,
+    type PreservedSource,
     preserveRetainedTail,
     remapFactLedgerSources,
     resolveSessionIds,
+    type ResultFirstRecord,
     safeError,
     selectResultFirstRecords,
+    type SessionCandidate,
     sessionJsonl,
     sha256File,
     sha256String,
     singleFactLedgerDomain,
+    type SourceRef,
     stripAssistantThinking,
     switchPreservingSources,
     validateCapsuleResponse,
@@ -30,65 +38,58 @@ import {
     validateCapsuleReviewResponse,
     validateFactLedgerResponse,
     validateSessionHeaderLine,
-    type Capsule,
-    type CapsuleReview,
-    type FactLedger,
-    type InputStats,
-    type PreservedSource,
-    type ResultFirstRecord,
-    type SessionCandidate,
-    type SourceRef,
 } from "./core.ts";
 import {
-    DEFAULT_POLICY,
-    cleanupDocuments,
-    documentFromEntries,
-    mergePolicy,
     type CleanDocument,
+    cleanupDocuments,
     type CleanupPolicy,
     type CleanupResult,
+    DEFAULT_POLICY,
+    documentFromEntries,
+    mergePolicy,
     redactSecrets,
 } from "./textual.ts";
 import {
-    buildCleanSessionLinesFromResult,
-    verifyCleanSessionLines,
-    buildHandoffSessionLines,
-    verifyHandoffSessionLines,
     buildChunkPartsSessionLines,
-    verifyChunkPartsSessionLines,
-    type TextualCleanupManifest,
+    buildCleanSessionLinesFromResult,
+    buildHandoffSessionLines,
     type ChunkPartItem,
+    type TextualCleanupManifest,
+    verifyChunkPartsSessionLines,
+    verifyCleanSessionLines,
+    verifyHandoffSessionLines,
 } from "./session-writer.ts";
+import {buildHiddenHistoryArchive, type HiddenHistoryArchive} from "./history.ts";
+import {openCleanupCheckpoint} from "./checkpoint.ts";
 
 import {
     atomicWriteNativeTextual,
-    buildNativeCompactionPromptInput,
     generateNativeCompaction,
     isExpectedCompactionCancelled,
-    textualCapturePath,
     serializeOfficialMessages,
+    textualCapturePath,
 } from "./native-compaction.ts";
 import {
+    type AgentHandoffReport,
     assembleHandoffReport,
     buildEvidence,
     consolidationPrompt,
     detectPromptInjection,
     extractionPrompt,
-    renderHandoffMarkdown,
-    repairPrompt as handoffRepairPrompt,
-    reportTitle as handoffReportTitle,
-    reviewPrompt as handoffReviewPrompt,
-    pruneInternalRefs,
-    preserveActiveHardConstraints,
-    validateAgentHandoffReport,
-    validateHandoffCore,
-    validateHandoffFragment,
-    validateHandoffReview,
-    type AgentHandoffReport,
     type HandoffCore,
     type HandoffEvidence,
     type HandoffFragment,
     type HandoffReview,
+    preserveActiveHardConstraints,
+    pruneInternalRefs,
+    renderHandoffMarkdown,
+    repairPrompt as handoffRepairPrompt,
+    reportTitle as handoffReportTitle,
+    reviewPrompt as handoffReviewPrompt,
+    validateAgentHandoffReport,
+    validateHandoffCore,
+    validateHandoffFragment,
+    validateHandoffReview,
 } from "./handoff.ts";
 
 const MAX_CHUNK_CHARS = 24_000;
@@ -96,10 +97,13 @@ const MAX_CHUNK_CHARS = 24_000;
 // 120s 太紧会把指数步进阶段的已产生输出(如 24k 字符)在接近完成时截断成 aborted。
 // 提到 300s 以容纳慢/大输入的模型调用,避免“模型未正常停止”伪失败。
 const MODEL_TIMEOUT_MS = 300_000;
+const MODEL_TRANSIENT_RETRIES = 2;
 const BACKUP_ROOT = path.join(os.homedir(), ".pi", "agent", "session-distill-backups");
 const LOG_ROOT = path.join("/tmp", "session-distill-logs");
-const CLEANER_VERSION = "4.3.0";
-const HANDOFF_PROMPT_VERSION = "handoff-result-first-v1.2.0";
+const CLEANER_VERSION = "4.5.0";
+const HANDOFF_PROMPT_VERSION = "handoff-result-first-v1.2.1";
+const HANDOFF_CORE_NORMALIZATION_VERSION = "core-normalization-v2";
+const MAX_HANDOFF_REPAIRS = 5;
 const SOURCE_TEXT_DUMP_ROOT = "/tmp/session-distill-collected-text";
 const SOURCE_TEXT_DUMP_ENV = "SESSION_CLEANUP_DUMP_SOURCE_TEXT";
 const TEXT_EXPORT_ROOT = path.join(os.homedir(), ".pi", "agent", "session-distill-exports");
@@ -108,7 +112,7 @@ const NATIVE_COMPACTION_INSTRUCTIONS = "Create a grounded current-state checkpoi
 // /cleanup this is an explicit full-span compaction: retain only Pi's minimum valid boundary.
 const CLEANUP_THIS_KEEP_RECENT_TOKENS = 0;
 
-type PendingTextualCapture = {path?: string; preparationCaptured?: boolean};
+type PendingTextualCapture = { path?: string; preparationCaptured?: boolean };
 
 let pendingTextualCapture: PendingTextualCapture | undefined;
 
@@ -118,7 +122,10 @@ type RunLogger = {
 };
 
 function createNoopLogger(): RunLogger {
-    return {write() {}};
+    return {
+        write() {
+        }
+    };
 }
 
 interface SourceFingerprint {
@@ -172,9 +179,16 @@ class CleanupRunLogger {
             if (typeof value === "string" && value.length > 500) safe[key] = `${value.slice(0, 500)}…`;
             else safe[key] = value;
         }
-        fs.appendFileSync(this.path, `${JSON.stringify({timestamp: new Date().toISOString(), event, ...safe})}\n`, {mode: 0o600});
+        fs.appendFileSync(this.path, `${JSON.stringify({
+            timestamp: new Date().toISOString(),
+            event, ...safe
+        })}\n`, {mode: 0o600});
         const fd = fs.openSync(this.path, "r+");
-        try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        try {
+            fs.fsyncSync(fd);
+        } finally {
+            fs.closeSync(fd);
+        }
     }
 }
 
@@ -224,6 +238,7 @@ function exportCanonicalJson(runId: string, report: AgentHandoffReport): string 
     atomicWrite0600(outputPath, `${JSON.stringify(report, null, 2)}\n`);
     return outputPath;
 }
+
 interface GenerationStats extends InputStats {
     usage: Record<string, number>;
     modelCallCount: number;
@@ -239,19 +254,19 @@ function assistantText(content: unknown): string {
     if (!Array.isArray(content)) return "";
     return content.map((part) => {
         if (!part || typeof part !== "object") return "";
-        const block = part as {type?: string; text?: string};
+        const block = part as { type?: string; text?: string };
         return block.type === "text" && typeof block.text === "string" ? block.text : "";
     }).join("\n").trim();
 }
 
 function messageText(message: unknown): string {
     if (!message || typeof message !== "object" || Array.isArray(message)) return "";
-    return assistantText((message as {content?: unknown}).content);
+    return assistantText((message as { content?: unknown }).content);
 }
 
 function messageTimestamp(message: unknown): string | undefined {
     if (!message || typeof message !== "object" || Array.isArray(message)) return undefined;
-    const raw = (message as {timestamp?: unknown}).timestamp;
+    const raw = (message as { timestamp?: unknown }).timestamp;
     if (typeof raw === "number" && Number.isFinite(raw)) return new Date(raw).toISOString();
     if (typeof raw === "string" && raw) return raw;
     return undefined;
@@ -268,7 +283,7 @@ function boundedResultText(text: string, maxChars: number): string {
 
 function renderToolEvidence(message: unknown): string {
     if (!message || typeof message !== "object" || Array.isArray(message)) return "";
-    const value = message as {toolName?: unknown; isError?: unknown; content?: unknown};
+    const value = message as { toolName?: unknown; isError?: unknown; content?: unknown };
     const toolName = typeof value.toolName === "string" && value.toolName ? value.toolName : "unknown";
     const body = boundedResultText(assistantText(value.content), 5_000);
     if (!body) return "";
@@ -280,7 +295,7 @@ function renderUserFallback(message: unknown): string {
     return body ? `[User context fallback · only because result evidence was insufficient]\n${body}` : "";
 }
 
-function renderResultFirstRecord(record: ResultFirstRecord): {text: string; selectedChars: number} {
+function renderResultFirstRecord(record: ResultFirstRecord): { text: string; selectedChars: number } {
     const parts: string[] = [`[result_record turn=${record.turnIndex} mode=${record.mode}]`];
     let selectedChars = 0;
 
@@ -335,7 +350,11 @@ function resultFirstBlocks(messages: unknown[]): {
     }
     let sourceRawChars = 0;
     for (const message of messages) {
-        try { sourceRawChars += JSON.stringify(message).length; } catch { sourceRawChars += messageText(message).length; }
+        try {
+            sourceRawChars += JSON.stringify(message).length;
+        } catch {
+            sourceRawChars += messageText(message).length;
+        }
     }
     return {blocks, selectedChars, sourceRawChars, stats: selection};
 }
@@ -397,17 +416,21 @@ function assertSourceFingerprint(filePath: string, expected: SourceFingerprint, 
     }
 }
 
-function serializeCompleteMessage(message: unknown): {text: string; rawChars: number} {
+function serializeCompleteMessage(message: unknown): { text: string; rawChars: number } {
     const withoutThinking = stripAssistantThinking(message);
     const converted = convertToLlm([withoutThinking] as Parameters<typeof convertToLlm>[0]) as unknown[];
     if (converted.length === 0) return {text: "", rawChars: 0};
     let serialized = serializeConversation(converted);
-    const value = withoutThinking as {role?: string; errorMessage?: unknown};
+    const value = withoutThinking as { role?: string; errorMessage?: unknown };
     if (value.role === "assistant" && typeof value.errorMessage === "string" && value.errorMessage) {
         serialized = `${serialized}\n[Assistant error]: ${value.errorMessage}`;
     }
     let rawChars = 0;
-    try { rawChars = JSON.stringify(message).length; } catch { rawChars = serialized.length; }
+    try {
+        rawChars = JSON.stringify(message).length;
+    } catch {
+        rawChars = serialized.length;
+    }
     return {text: serialized, rawChars};
 }
 
@@ -419,9 +442,9 @@ function sourceFromManager(candidate: SessionCandidate, sourceFilePath: string, 
     const reduced = resultFirstBlocks(messages);
     const latestCompactionSummary = [...messages].reverse().find((message) => {
         if (!message || typeof message !== "object" || Array.isArray(message)) return false;
-        const value = message as {role?: unknown; summary?: unknown};
+        const value = message as { role?: unknown; summary?: unknown };
         return value.role === "compactionSummary" && typeof value.summary === "string" && value.summary.trim().length > 0;
-    }) as {summary?: string} | undefined;
+    }) as { summary?: string } | undefined;
     if (latestCompactionSummary?.summary) {
         // Effective-context mode may intentionally expose only the latest compaction summary plus
         // retained tail. The summary is already a result artifact, not raw chat, so keep it once.
@@ -505,16 +528,24 @@ function reviewInstructions(): string {
 async function completeValidated<T>(
     ctx: ExtensionCommandContext,
     prompt: string,
- stats: GenerationStats,
+    stats: GenerationStats,
     phase: string,
     validate: (raw: string, stopReason: string) => T,
 ): Promise<T> {
     if (!ctx.model) throw new Error("当前无可用模型;确定性 fallback 不会提交知识胶囊");
-    const modelRegistry = (ctx as {modelRegistry?: {complete: (model: unknown, payload: unknown, options?: unknown) => Promise<{content: unknown; stopReason: string; usage?: unknown; errorMessage?: unknown}>}}).modelRegistry;
+    const modelRegistry = (ctx as {
+        modelRegistry?: {
+            complete: (model: unknown, payload: unknown, options?: unknown) => Promise<{
+                content: unknown;
+                stopReason: string;
+                usage?: unknown;
+                errorMessage?: unknown
+            }>
+        }
+    }).modelRegistry;
     if (!modelRegistry) throw new Error("当前无模型调用器;请联系配置上下文");
 
-    const request = async (text: string, attempt: "initial" | "repair" | "repair2") => {
-
+    const requestOnce = async (text: string, attempt: "initial" | "repair" | "retry") => {
         const callId = ++stats.modelCallCount;
         const started = Date.now();
         stats.log?.write("model_call_started", {callId, phase, attempt, inputChars: text.length});
@@ -530,18 +561,59 @@ async function completeValidated<T>(
             if (process.env.SESSION_CLEANUP_DUMP_MODEL_OUTPUT) {
                 try {
                     const dir = "/tmp/session-distill-model-output";
-                    fs.mkdirSync(dir, {recursive: true});
+                    fs.mkdirSync(dir, {recursive: true, mode: 0o700});
+                    fs.chmodSync(dir, 0o700);
                     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-                    fs.writeFileSync(`${dir}/p${phase}_a${attempt}_${stamp}.json`, JSON.stringify({phase, attempt, stopReason: response.stopReason, raw}, null, 2));
-                } catch { /* best-effort */ }
+                    const dumpPath = `${dir}/p${phase}_a${attempt}_${stamp}.json`;
+                    fs.writeFileSync(dumpPath, JSON.stringify({
+                        phase,
+                        attempt,
+                        prompt: text,
+                        stopReason: response.stopReason,
+                        errorMessage: response.errorMessage,
+                        raw
+                    }, null, 2), {mode: 0o600});
+                    fs.chmodSync(dumpPath, 0o600);
+                    stats.log?.write("model_exchange_dumped", {callId, phase, attempt, dumpPath});
+                } catch { /* best-effort */
+                }
             }
-            stats.log?.write("model_call_finished", {callId, phase, attempt, durationMs: Date.now() - started, stopReason: response.stopReason, outputChars: raw.length});
+            stats.log?.write("model_call_finished", {
+                callId,
+                phase,
+                attempt,
+                durationMs: Date.now() - started,
+                stopReason: response.stopReason,
+                outputChars: raw.length
+            });
             return {raw, stopReason: response.stopReason, errorMessage: response.errorMessage};
         } catch (error) {
-            stats.log?.write("model_call_failed", {callId, phase, attempt, durationMs: Date.now() - started, error: safeError(error)});
+            stats.log?.write("model_call_failed", {
+                callId,
+                phase,
+                attempt,
+                durationMs: Date.now() - started,
+                error: safeError(error)
+            });
             throw error;
         } finally {
             clearTimeout(timer);
+        }
+    };
+
+    const request = async (text: string, attempt: "initial" | "repair") => {
+        for (let retry = 0; ; retry++) {
+            try {
+                const response = await requestOnce(text, retry === 0 ? attempt : "retry");
+                const reason = String(response.errorMessage ?? "");
+                const transient = response.stopReason === "error" && /websocket error|fetch failed/i.test(reason);
+                if (!transient || retry >= MODEL_TRANSIENT_RETRIES) return response;
+                stats.log?.write("model_call_retry", {phase, attempt, retry: retry + 1, reason});
+            } catch (error) {
+                const reason = safeError(error);
+                if (!/websocket error|fetch failed/i.test(reason) || retry >= MODEL_TRANSIENT_RETRIES) throw error;
+                stats.log?.write("model_call_retry", {phase, attempt, retry: retry + 1, reason});
+            }
         }
     };
 
@@ -553,6 +625,7 @@ async function completeValidated<T>(
     try {
         return validate(first.raw, first.stopReason);
     } catch (error) {
+        stats.log?.write("model_validation_failed", {phase, attempt: "initial", error: safeError(error)});
         const repairPrompt = [
             prompt,
             `The previous response failed validation: ${safeError(error)}`,
@@ -585,7 +658,7 @@ function completeReview(ctx: ExtensionCommandContext, prompt: string, ledger: Fa
 interface BoundedLedger {
     ledger: FactLedger;
     boundary: string;
-    provenance: Array<{id: string; name: string; timestamp: string}>;
+    provenance: Array<{ id: string; name: string; timestamp: string }>;
 }
 
 function ledgerBoundary(ledger: FactLedger, provenance: BoundedLedger["provenance"]): string {
@@ -636,7 +709,10 @@ async function reduceFactLedgers(
     return result;
 }
 
-async function editLedgerToCapsule(ctx: ExtensionCommandContext, ledger: FactLedger, expectedIds: string[], stats: GenerationStats, previous?: {capsule: Capsule; review: CapsuleReview}): Promise<Capsule> {
+async function editLedgerToCapsule(ctx: ExtensionCommandContext, ledger: FactLedger, expectedIds: string[], stats: GenerationStats, previous?: {
+    capsule: Capsule;
+    review: CapsuleReview
+}): Promise<Capsule> {
     const domain = singleFactLedgerDomain(ledger);
     const prompt = [
         capsuleInstructions(),
@@ -695,8 +771,7 @@ async function generateKnowledgeCapsule(
     ctx: ExtensionCommandContext,
     sources: SourceContext[],
     logger?: RunLogger,
-): Promise<{capsule: Capsule; review: CapsuleReview; stats: GenerationStats; bestEffort?: {reason: string}}>
-{
+): Promise<{ capsule: Capsule; review: CapsuleReview; stats: GenerationStats; bestEffort?: { reason: string } }> {
     const stats: GenerationStats = {
         sourceCount: sources.length, messageCount: 0, chunkCount: 0,
         rawChars: 0, usage: {},
@@ -833,7 +908,7 @@ interface CleanupCommandOptions {
     help: boolean;
 }
 
-function takeOptionValue(tokens: string[], index: number, name: string): {value: string; consumed: number} {
+function takeOptionValue(tokens: string[], index: number, name: string): { value: string; consumed: number } {
     const token = tokens[index];
     const prefix = `${name}=`;
     if (token.startsWith(prefix)) return {value: token.slice(prefix.length), consumed: 1};
@@ -856,50 +931,104 @@ function parseCleanupArgs(args: string): CleanupCommandOptions {
 
     for (let index = 0; index < tokens.length;) {
         const token = tokens[index];
-        if (token === "--help" || token === "-h") { help = true; index += 1; continue; }
-        if (token === "--handoff") { mode = "handoff"; policy = mergePolicy(policy, {mode: "textual"}); index += 1; continue; }
-        if (token === "--textual") { mode = "textual"; policy = mergePolicy(policy, {mode: "textual"}); index += 1; continue; }
-        if (token === "--capsule" || token === "--semantic") { mode = "capsule"; policy = mergePolicy(policy, {mode: "semantic"}); index += 1; continue; }
-        if (token === "--archive") { policy = mergePolicy(policy, {sourceView: "active-branch"}); index += 1; continue; }
-        if (token === "--timestamps") { policy = mergePolicy(policy, {timestamps: "inline"}); index += 1; continue; }
-        if (token === "--export-text") { exportText = true; index += 1; continue; }
-        if (token === "--export-json") { exportJson = true; index += 1; continue; }
+        if (token === "--help" || token === "-h") {
+            help = true;
+            index += 1;
+            continue;
+        }
+        if (token === "--handoff") {
+            mode = "handoff";
+            policy = mergePolicy(policy, {mode: "textual"});
+            index += 1;
+            continue;
+        }
+        if (token === "--textual") {
+            mode = "textual";
+            policy = mergePolicy(policy, {mode: "textual"});
+            index += 1;
+            continue;
+        }
+        if (token === "--capsule" || token === "--semantic") {
+            mode = "capsule";
+            policy = mergePolicy(policy, {mode: "semantic"});
+            index += 1;
+            continue;
+        }
+        if (token === "--archive") {
+            policy = mergePolicy(policy, {sourceView: "active-branch"});
+            index += 1;
+            continue;
+        }
+        if (token === "--timestamps") {
+            policy = mergePolicy(policy, {timestamps: "inline"});
+            index += 1;
+            continue;
+        }
+        if (token === "--export-text") {
+            exportText = true;
+            index += 1;
+            continue;
+        }
+        if (token === "--export-json") {
+            exportJson = true;
+            index += 1;
+            continue;
+        }
 
         if (token === "--view" || token.startsWith("--view=")) {
             const parsed = takeOptionValue(tokens, index, "--view");
             if (parsed.value !== "effective-context" && parsed.value !== "active-branch") throw new Error("--view 仅支持 effective-context|active-branch");
-            policy = mergePolicy(policy, {sourceView: parsed.value}); index += parsed.consumed; continue;
+            policy = mergePolicy(policy, {sourceView: parsed.value});
+            index += parsed.consumed;
+            continue;
         }
         if (token === "--tools" || token.startsWith("--tools=")) {
             const parsed = takeOptionValue(tokens, index, "--tools");
             if (!["none", "errors", "all"].includes(parsed.value)) throw new Error("--tools 仅支持 none|errors|all");
-            policy = mergePolicy(policy, {toolText: parsed.value as CleanupPolicy["toolText"]}); index += parsed.consumed; continue;
+            policy = mergePolicy(policy, {toolText: parsed.value as CleanupPolicy["toolText"]});
+            index += parsed.consumed;
+            continue;
         }
         if (token === "--bash" || token.startsWith("--bash=")) {
             const parsed = takeOptionValue(tokens, index, "--bash");
             if (!["none", "errors", "all"].includes(parsed.value)) throw new Error("--bash 仅支持 none|errors|all");
-            policy = mergePolicy(policy, {bashText: parsed.value as CleanupPolicy["bashText"]}); index += parsed.consumed; continue;
+            policy = mergePolicy(policy, {bashText: parsed.value as CleanupPolicy["bashText"]});
+            index += parsed.consumed;
+            continue;
         }
         if (token === "--near" || token.startsWith("--near=")) {
             const parsed = takeOptionValue(tokens, index, "--near");
             if (!["off", "lexical"].includes(parsed.value)) throw new Error("--near 仅支持 off|lexical");
-            policy = mergePolicy(policy, {dedup: {...policy.dedup, near: parsed.value as CleanupPolicy["dedup"]["near"]}}); index += parsed.consumed; continue;
+            policy = mergePolicy(policy, {
+                dedup: {
+                    ...policy.dedup,
+                    near: parsed.value as CleanupPolicy["dedup"]["near"]
+                }
+            });
+            index += parsed.consumed;
+            continue;
         }
         if (token === "--roles" || token.startsWith("--roles=")) {
             const parsed = takeOptionValue(tokens, index, "--roles");
             if (!["keep", "strip"].includes(parsed.value)) throw new Error("--roles 仅支持 keep|strip");
-            policy = mergePolicy(policy, {roleLabels: parsed.value as CleanupPolicy["roleLabels"]}); index += parsed.consumed; continue;
+            policy = mergePolicy(policy, {roleLabels: parsed.value as CleanupPolicy["roleLabels"]});
+            index += parsed.consumed;
+            continue;
         }
         if (token === "--secrets" || token.startsWith("--secrets=")) {
             const parsed = takeOptionValue(tokens, index, "--secrets");
             const value = parsed.value === "preserve" ? "preserve-local-only" : parsed.value;
             if (!["redact", "preserve-local-only"].includes(value)) throw new Error("--secrets 仅支持 redact|preserve");
-            policy = mergePolicy(policy, {secrets: value as CleanupPolicy["secrets"]}); index += parsed.consumed; continue;
+            policy = mergePolicy(policy, {secrets: value as CleanupPolicy["secrets"]});
+            index += parsed.consumed;
+            continue;
         }
         if (token === "--order" || token.startsWith("--order=")) {
             const parsed = takeOptionValue(tokens, index, "--order");
             if (!["auto", "given"].includes(parsed.value)) throw new Error("--order 仅支持 auto|given");
-            policy = mergePolicy(policy, {mergeOrder: parsed.value as CleanupPolicy["mergeOrder"]}); index += parsed.consumed; continue;
+            policy = mergePolicy(policy, {mergeOrder: parsed.value as CleanupPolicy["mergeOrder"]});
+            index += parsed.consumed;
+            continue;
         }
         if (token.startsWith("--")) throw new Error(`未知选项: ${token}`);
         sourceTokens.push(token);
@@ -942,7 +1071,7 @@ function helpText(): string {
     ].join("\n");
 }
 
-function sessionTimestamp(item: SessionCandidate & {created?: string | number | Date}): string {
+function sessionTimestamp(item: SessionCandidate & { created?: string | number | Date }): string {
     const created = item.created;
     if (created instanceof Date) return created.toISOString();
     if (typeof created === "string") return created;
@@ -960,7 +1089,7 @@ async function interactiveSelect(ctx: ExtensionCommandContext): Promise<SessionC
 
     const selected: SessionCandidate[] = [];
     const remaining = [...candidates];
-    const picker = (ctx.ui as {select?: (title: string, options: string[]) => Promise<string | undefined>}).select;
+    const picker = (ctx.ui as { select?: (title: string, options: string[]) => Promise<string | undefined> }).select;
     if (typeof picker !== "function") {
         throw new Error("当前上下文不支持会话选择交互，请显式指定会话 ID 或使用 /cleanup this");
     }
@@ -985,7 +1114,7 @@ async function resolveRequestedSessions(sourceTokens: string[], ctx: ExtensionCo
     if (sourceTokens.length === 1 && sourceTokens[0] === "this") {
         const file = ctx.sessionManager.getSessionFile();
         if (!file) throw new Error("当前会话没有持久化文件");
-        const header = ctx.sessionManager.getHeader() as {timestamp?: string} | null;
+        const header = ctx.sessionManager.getHeader() as { timestamp?: string } | null;
         return [{
             path: file, id: ctx.sessionManager.getSessionId(), cwd: ctx.sessionManager.getCwd(),
             name: ctx.sessionManager.getSessionName(), timestamp: header?.timestamp,
@@ -1011,7 +1140,7 @@ interface LoadedSource {
 }
 
 function effectiveEntriesFromManager(manager: ReturnType<typeof SessionManager.open>, effectiveMessages?: unknown[]): unknown[] {
-    const compatible = manager as ReturnType<typeof SessionManager.open> & {buildContextEntries?: () => unknown[]};
+    const compatible = manager as ReturnType<typeof SessionManager.open> & { buildContextEntries?: () => unknown[] };
     if (typeof compatible.buildContextEntries === "function") return compatible.buildContextEntries();
     // Compatibility fallback for older Pi builds: buildSessionContext already applies the
     // installed version's compaction semantics; wrap its messages as synthetic message entries.
@@ -1095,7 +1224,7 @@ function cleanTitle(loaded: LoadedSource[], mode: "textual" | "semantic"): strin
     return `${prefix} · ${joined}`.slice(0, 180);
 }
 
-function preservedSources(loaded: LoadedSource[], snapshotFiles: Array<{sha256: string}>): PreservedSource[] {
+function preservedSources(loaded: LoadedSource[], snapshotFiles: Array<{ sha256: string }>): PreservedSource[] {
     return loaded.map((source, index) => ({
         sourcePath: source.candidate.path,
         sha256: snapshotFiles[index]?.sha256 ?? source.fingerprint.sha256,
@@ -1111,7 +1240,7 @@ function branchEntryRecord(entry: unknown): Record<string, unknown> | undefined 
     return entry && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : undefined;
 }
 
-function previousHandoffFromBranch(branch: SessionEntry[]): {report: AgentHandoffReport; index: number} | undefined {
+function previousHandoffFromBranch(branch: SessionEntry[]): { report: AgentHandoffReport; index: number } | undefined {
     for (let index = branch.length - 1; index >= 0; index--) {
         const entry = branchEntryRecord(branch[index]);
         if (!entry || entry.type !== "custom" || entry.customType !== "cleanup_handoff") continue;
@@ -1158,7 +1287,11 @@ function handoffInputFromBranch(branch: SessionEntry[], previousIndex?: number, 
         const serialized = serializeOfficialMessages(messages);
         let sourceRawChars = 0;
         for (const message of messages) {
-            try { sourceRawChars += JSON.stringify(message).length; } catch { sourceRawChars += messageText(message).length; }
+            try {
+                sourceRawChars += JSON.stringify(message).length;
+            } catch {
+                sourceRawChars += messageText(message).length;
+            }
         }
         const selectedChars = serialized === "(none)" ? 0 : serialized.length;
         return {
@@ -1180,7 +1313,7 @@ function handoffInputFromBranch(branch: SessionEntry[], previousIndex?: number, 
     const compactionSummaries: string[] = [];
     // Ordered stream items: 保留 compaction(excerpt) 与正文 message 的交错顺序,
     // 避免把 Remnic Conversation Excerpt 丢到 fallback 或整体混在一起。
-    const ordered: Array<{kind: "msg"; value: unknown} | {kind: "excerpt"; value: string}> = [];
+    const ordered: Array<{ kind: "msg"; value: unknown } | { kind: "excerpt"; value: string }> = [];
     // Remnic 的逐代嵌套会让每条新 compaction 重复内嵌同一段早期 excerpt;
     // 只保留首个 distinct excerpt,避免保序输出时同一内容重复出现多次。
     const seenExcerptShas: string[] = [];
@@ -1256,17 +1389,24 @@ function handoffInputFromBranch(branch: SessionEntry[], previousIndex?: number, 
     };
 }
 
-function redactStructuredStrings<T>(value: T): {value: T; count: number} {
+type RedactableJson = string | number | boolean | null | undefined | RedactableJson[] | {
+    [key: string]: RedactableJson
+};
+
+function redactStructuredStrings<T>(value: T): { value: T; count: number } {
     let count = 0;
-    const visit = (item: unknown): unknown => {
+    const visit = (item: unknown): RedactableJson => {
         if (typeof item === "string") {
             const redacted = redactSecrets(item);
             count += redacted.count;
             return redacted.text;
         }
+        if (typeof item === "number" || typeof item === "boolean" || item === null || item === undefined) return item;
         if (Array.isArray(item)) return item.map(visit);
-        if (!item || typeof item !== "object") return item;
-        return Object.fromEntries(Object.entries(item as Record<string, unknown>).map(([key, child]) => [key, visit(child)]));
+        if (typeof item === "object") {
+            return Object.fromEntries(Object.entries(item as Record<string, unknown>).map(([key, child]) => [key, visit(child)]));
+        }
+        throw new Error(`结构化脱敏遇到不可序列化值: ${typeof item}`);
     };
     return {value: visit(value) as T, count};
 }
@@ -1321,9 +1461,9 @@ async function completeHandoffReview(ctx: ExtensionCommandContext, prompt: strin
     return completeValidated(ctx, prompt, stats, "handoff-review", (raw, stopReason) => validateHandoffReview(raw, stopReason, allowedRefs));
 }
 
-function verifyWrittenHandoffSession(filePath: string, sessionId: string, title: string, body: string, reportId: string): void {
+function verifyWrittenHandoffSession(filePath: string, sessionId: string, title: string, body: string, reportId: string, historyArchiveId?: string): void {
     const rawLines = parseJsonLines(fs.readFileSync(filePath, "utf8").split("\n"));
-    verifyHandoffSessionLines(rawLines, body, sessionId, reportId);
+    verifyHandoffSessionLines(rawLines, body, sessionId, reportId, historyArchiveId);
     const manager = SessionManager.open(filePath);
     const header = manager.getHeader();
     if (!header || header.id !== sessionId) throw new Error("写后验证失败: handoff header id 不一致");
@@ -1331,6 +1471,9 @@ function verifyWrittenHandoffSession(filePath: string, sessionId: string, title:
     if (manager.getSessionName() !== title) throw new Error("写后验证失败: handoff 会话名称缺失");
     const context = manager.buildSessionContext().messages;
     if (countExactString(context, body) !== 1) throw new Error("写后验证失败: handoff Markdown 未恰好一次进入有效上下文");
+    if (context.some((message: any) => message?.role === "custom" && message?.customType === "cleanup_source_root")) {
+        throw new Error("写后验证失败: 来源历史分支泄漏到 active context");
+    }
     if ((fs.statSync(filePath).mode & 0o777) !== 0o600) throw new Error("写后验证失败: handoff 文件权限不是 0600");
 }
 
@@ -1343,7 +1486,8 @@ function writeHandoffResultSession(options: {
     manifest: TextualCleanupManifest;
     cwd: string;
     logger: RunLogger;
-}): {outputPath: string; sessionId: string} {
+    history?: HiddenHistoryArchive;
+}): { outputPath: string; sessionId: string } {
     const sessionId = crypto.randomUUID();
     const outputPath = path.join(path.dirname(options.loaded[0].candidate.path), sessionFileName(sessionId));
     const lines = buildHandoffSessionLines({
@@ -1354,18 +1498,24 @@ function writeHandoffResultSession(options: {
         imports: buildImports(options.loaded),
         manifest: options.manifest,
         report: options.report,
+        history: options.history,
     });
-    verifyHandoffSessionLines(lines, options.body, sessionId, options.report.reportId);
+    verifyHandoffSessionLines(lines, options.body, sessionId, options.report.reportId, options.history?.manifest.archiveId);
     atomicWrite0600(outputPath, sessionJsonl(lines));
     try {
-        verifyWrittenHandoffSession(outputPath, sessionId, options.title, options.body, options.report.reportId);
+        verifyWrittenHandoffSession(outputPath, sessionId, options.title, options.body, options.report.reportId, options.history?.manifest.archiveId);
     } catch (error) {
         const quarantined = `${outputPath}.invalid-${options.runId}`;
         fs.renameSync(outputPath, quarantined);
         options.logger.write("output_quarantined", {path: quarantined, error: safeError(error)});
         throw error;
     }
-    options.logger.write("handoff_output_written", {outputPath, sessionId, bytes: fs.statSync(outputPath).size, reportId: options.report.reportId});
+    options.logger.write("handoff_output_written", {
+        outputPath,
+        sessionId,
+        bytes: fs.statSync(outputPath).size,
+        reportId: options.report.reportId
+    });
     return {outputPath, sessionId};
 }
 
@@ -1378,7 +1528,7 @@ function writeResultSession(options: {
     manifest: TextualCleanupManifest;
     cwd: string;
     logger: RunLogger;
-}): {outputPath: string; sessionId: string} {
+}): { outputPath: string; sessionId: string } {
     const sessionId = crypto.randomUUID();
     const outputPath = path.join(path.dirname(options.loaded[0].candidate.path), sessionFileName(sessionId));
     const lines = buildCleanSessionLinesFromResult({
@@ -1399,13 +1549,18 @@ function writeResultSession(options: {
         options.logger.write("output_quarantined", {path: quarantined, error: safeError(error)});
         throw error;
     }
-    options.logger.write("output_written", {outputPath, sessionId, bytes: fs.statSync(outputPath).size, outputSegments: options.result.diagnostics.outputSegments});
+    options.logger.write("output_written", {
+        outputPath,
+        sessionId,
+        bytes: fs.statSync(outputPath).size,
+        outputSegments: options.result.diagnostics.outputSegments
+    });
     return {outputPath, sessionId};
 }
 
 async function finalizeAndSwitch(options: {
     loaded: LoadedSource[];
-    snapshotFiles: Array<{file: string; bytes: number; sha256: string}>;
+    snapshotFiles: Array<{ file: string; bytes: number; sha256: string }>;
     outputPath: string;
     snapshotDirectory?: string;
     ctx: ExtensionCommandContext;
@@ -1455,7 +1610,7 @@ async function finalizeAndSwitch(options: {
 
 function archiveExplicitHandoffSources(options: {
     candidates: SessionCandidate[];
-    snapshotFiles: Array<{file: string; bytes: number; sha256: string}>;
+    snapshotFiles: Array<{ file: string; bytes: number; sha256: string }>;
     outputPath: string;
     activeSessionPath?: string;
     runId: string;
@@ -1480,12 +1635,13 @@ function archiveExplicitHandoffSources(options: {
         names.add(name);
         return {candidate, fingerprint, snapshot, name};
     });
-    const tmpDevice = fs.statSync(os.tmpdir()).dev;
+    const tmpRoot = "/tmp";
+    const tmpDevice = fs.statSync(tmpRoot).dev;
     if (prepared.some((item) => item.fingerprint.device !== tmpDevice)) {
         throw new Error("源会话与 /tmp 不在同一文件系统，拒绝非原子归档");
     }
 
-    const archiveDirectory = path.join(os.tmpdir(), `session-distill-sources-${options.runId}`);
+    const archiveDirectory = path.join(tmpRoot, `session-distill-sources-${options.runId}`);
     fs.mkdirSync(archiveDirectory, {recursive: false, mode: 0o700});
     fs.chmodSync(archiveDirectory, 0o700);
     const entries = prepared.map((item) => ({
@@ -1497,14 +1653,15 @@ function archiveExplicitHandoffSources(options: {
         status: "pending",
     }));
     const manifestPath = path.join(archiveDirectory, "manifest.json");
-    const writeManifest = () => atomicWrite0600(manifestPath, `${JSON.stringify({
+    const manifestContent = () => `${JSON.stringify({
         schemaVersion: 1,
         runId: options.runId,
         createdAt: new Date().toISOString(),
         outputPath: options.outputPath,
         entries,
-    }, null, 2)}\n`);
-    writeManifest();
+    }, null, 2)}\n`;
+    atomicWrite0600(manifestPath, manifestContent());
+    const writeManifest = () => atomicReplace0600(manifestPath, manifestContent());
     try {
         for (const [index, item] of prepared.entries()) {
             assertSourceFingerprint(item.candidate.path, item.fingerprint, "归档移动前");
@@ -1587,7 +1744,10 @@ async function runSpecifiedNativeCompaction(command: CleanupCommandOptions, ctx:
     const branchEntries = frozenManager.getBranch();
     const preparation = await nativePrepareCompaction(branchEntries, settings);
     if (!preparation) {
-        logger.write("specified_native_nothing_to_compact", {sourceId: candidate.id, snapshotDirectory: snapshot.directory});
+        logger.write("specified_native_nothing_to_compact", {
+            sourceId: candidate.id,
+            snapshotDirectory: snapshot.directory
+        });
         ctx.ui.notify(`会话 ${candidate.id} 没有可压缩的旧上下文；源会话未修改`, "info");
         return;
     }
@@ -1623,7 +1783,11 @@ async function runSpecifiedNativeCompaction(command: CleanupCommandOptions, ctx:
         || last.details?.profile !== compaction.details?.profile) {
         throw new Error(`指定会话 CompactionEntry 回读验证失败；可从快照恢复: ${snapshot.directory}`);
     }
-    logger.write("specified_native_compaction_written", {sourceId: candidate.id, entryId, snapshotDirectory: snapshot.directory});
+    logger.write("specified_native_compaction_written", {
+        sourceId: candidate.id,
+        entryId,
+        snapshotDirectory: snapshot.directory
+    });
     ctx.ui.notify(`会话 ${candidate.id} 已原地追加 native CompactionEntry；快照: ${snapshot.directory}`, "info");
 }
 
@@ -1672,7 +1836,11 @@ async function runOfflineTextualCleanup(command: CleanupCommandOptions, ctx: Ext
     const outputPath = textualCapturePath();
     atomicWrite0600(outputPath, parts.join("\n"));
     if ((fs.statSync(outputPath).mode & 0o777) !== 0o600) throw new Error("offline textual 输出权限验证失败");
-    logger.write("offline_textual_written", {outputPath, sourceCount: candidates.length, bytes: fs.statSync(outputPath).size});
+    logger.write("offline_textual_written", {
+        outputPath,
+        sourceCount: candidates.length,
+        bytes: fs.statSync(outputPath).size
+    });
     ctx.ui.notify(`offline handoff 输入已写入: ${outputPath}`, "info");
     if (ctx.mode === "print") process.stdout.write(`cleanup textual 产物已写入: ${outputPath}\n`);
 }
@@ -1694,15 +1862,41 @@ async function runHandoffCleanup(command: CleanupCommandOptions, ctx: ExtensionC
     logger.write("source_mode", {hasUI: ctx.hasUI, mode: ctx.mode, archiveExplicitSources});
     // headless(print/json)模式:仍可执行清洗并落盘 clean session,只是不做会话切换。
     // 最终由 finalizeAndSwitch 在 headless 下跳过 switchSession 并把产物路径输出到 stdout。
-    logger.write("sources_resolved", {mode: "handoff", sourceCount: candidates.length, sourceIds: candidates.map((item) => item.id)});
+    logger.write("sources_resolved", {
+        mode: "handoff",
+        sourceCount: candidates.length,
+        sourceIds: candidates.map((item) => item.id)
+    });
 
     const snapshot = createSnapshot(candidates.map((source) => source.path), BACKUP_ROOT, runId);
     const snapshotPaths = snapshot.files.map((file) => path.join(snapshot.directory, file.file));
-    logger.write("snapshot_created", {directory: snapshot.directory, files: snapshot.files.length, timing: "before_cleanup"});
+    logger.write("snapshot_created", {
+        directory: snapshot.directory,
+        files: snapshot.files.length,
+        timing: "before_cleanup"
+    });
     // Handoff always reads a frozen active branch. Existing v4 canonical handoff is reused as state;
     // only raw tail entries after cleanup_handoff are re-extracted.
     const handoffPolicy = mergePolicy(command.policy, {mode: "textual", sourceView: "active-branch"});
     const loaded = await loadSources(candidates, ctx, handoffPolicy, false, logger, snapshotPaths);
+    const hiddenHistory = candidates.length > 1
+        ? buildHiddenHistoryArchive(candidates.map((candidate, sourceIndex) => ({
+            sourceId: candidate.id,
+            sourceIndex,
+            filePath: snapshotPaths[sourceIndex],
+            name: candidate.name,
+            timestamp: candidate.timestamp,
+        })))
+        : undefined;
+    if (hiddenHistory) {
+        logger.write("hidden_history_prepared", {
+            archiveId: hiddenHistory.manifest.archiveId,
+            sourceCount: hiddenHistory.manifest.sourceCount,
+            recordCount: hiddenHistory.manifest.recordCount,
+            sourceBytes: hiddenHistory.manifest.sources.reduce((sum, source) => sum + source.bytes, 0),
+            compressedBytes: hiddenHistory.manifest.sources.reduce((sum, source) => sum + source.compressedBytes, 0),
+        });
+    }
 
     const previousReports: AgentHandoffReport[] = [];
     const inheritedEvidence: HandoffEvidence[] = [];
@@ -1713,7 +1907,7 @@ async function runHandoffCleanup(command: CleanupCommandOptions, ctx: ExtensionC
     let redactionsApplied = 0;
     let totalChunks = 0;
     let rawChars = 0;
-    const preparedChunks: Array<{sourceId: string; coverageId: string; text: string}> = [];
+    const preparedChunks: Array<{ sourceId: string; coverageId: string; text: string }> = [];
 
     for (const source of loaded) {
         const previous = previousHandoffFromBranch(source.branch);
@@ -1722,7 +1916,10 @@ async function runHandoffCleanup(command: CleanupCommandOptions, ctx: ExtensionC
             inheritedEvidence.push(...previous.report.evidence);
             redactionsApplied += previous.report.security.redactionsApplied;
             promptInjectionFlags.push(...previous.report.security.promptInjectionFlags);
-            logger.write("previous_handoff_detected", {sourceId: source.candidate.id, reportId: previous.report.reportId});
+            logger.write("previous_handoff_detected", {
+                sourceId: source.candidate.id,
+                reportId: previous.report.reportId
+            });
         }
         const handoffInput = handoffInputFromBranch(source.branch, previous?.index, source.messages);
         const rawBlocks = handoffInput.blocks.flatMap((block) => splitOversizedHandoffBlock(block));
@@ -1774,7 +1971,11 @@ async function runHandoffCleanup(command: CleanupCommandOptions, ctx: ExtensionC
     }
 
     const parentReportIds = [...new Set(previousReports.map((report) => report.reportId))];
-    const inputSnapshots = snapshot.files.map((file, index) => ({sourceId: loaded[index].candidate.id, sha256: file.sha256, bytes: file.bytes}));
+    const inputSnapshots = snapshot.files.map((file, index) => ({
+        sourceId: loaded[index].candidate.id,
+        sha256: file.sha256,
+        bytes: file.bytes
+    }));
     const reportKind: AgentHandoffReport["reportKind"] = loaded.length > 1 ? "merge" : previousReports.length ? "reclean" : "clean_handoff";
     const stats: GenerationStats = {
         sourceCount: loaded.length,
@@ -1785,10 +1986,16 @@ async function runHandoffCleanup(command: CleanupCommandOptions, ctx: ExtensionC
         modelCallCount: 0,
         log: logger,
     };
+    const modelLabel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "canonical-reuse";
+    const checkpoint = ctx.model ? openCleanupCheckpoint({
+        sourceSnapshots: inputSnapshots,
+        model: modelLabel,
+        promptVersion: HANDOFF_PROMPT_VERSION
+    }) : undefined;
+    if (checkpoint) logger.write("checkpoint_ready", {checkpointKey: checkpoint.key, directory: checkpoint.directory});
 
     let core: HandoffCore;
     let review: HandoffReview;
-    let modelLabel = "canonical-reuse";
 
     if (loaded.length === 1 && previousReports.length === 1 && preparedChunks.length === 0) {
         core = coreFromReport(previousReports[0]);
@@ -1796,12 +2003,20 @@ async function runHandoffCleanup(command: CleanupCommandOptions, ctx: ExtensionC
         if (!review.pass) throw new Error("旧 handoff 未通过质量门禁，拒绝无证据复用；请从原始来源重新清洗");
         logger.write("handoff_reused_without_delta", {reportId: previousReports[0].reportId});
     } else {
-        if (!ctx.model) throw new Error("默认 handoff cleanup 需要当前模型；如只需机械文本清理请使用 /cleanup --textual");
-        modelLabel = `${ctx.model.provider}/${ctx.model.id}`;
+        if (!ctx.model || !checkpoint) throw new Error("默认 handoff cleanup 需要当前模型；如只需机械文本清理请使用 /cleanup --textual");
         ctx.ui.notify(`正在生成 Agent Handoff：${loaded.length} 个源会话，${preparedChunks.length} 个新增证据块...`, "info");
 
         for (const chunk of preparedChunks) {
-            const fragment = await completeHandoffFragment(ctx, extractionPrompt(chunk), chunk.coverageId, stats);
+            const prompt = extractionPrompt(chunk);
+            const inputHash = sha256String(prompt);
+            const artifactName = `fragment-${sha256String(chunk.coverageId).slice(0, 20)}`;
+            let fragment = checkpoint.read(artifactName, inputHash, (value) => validateHandoffFragment(JSON.stringify(value), "stop", chunk.coverageId));
+            if (fragment) {
+                logger.write("checkpoint_reused", {artifact: artifactName, coverageId: chunk.coverageId});
+            } else {
+                fragment = await completeHandoffFragment(ctx, prompt, chunk.coverageId, stats);
+                checkpoint.write(artifactName, inputHash, fragment);
+            }
             fragments.push(fragment);
         }
 
@@ -1810,30 +2025,92 @@ async function runHandoffCleanup(command: CleanupCommandOptions, ctx: ExtensionC
             ...previousReports.flatMap((report) => report.evidence.map((item) => item.id)),
         ]);
         if (allowedRefs.size === 0) throw new Error("没有可用于 handoff 的 canonical state 或新增证据");
-        core = await completeHandoffCore(ctx, consolidationPrompt({fragments, previousReports, allowedEvidenceRefs: [...allowedRefs]}), allowedRefs, stats, "handoff-consolidate");
-        core = preserveActiveHardConstraints(core, previousReports);
-        core = pruneInternalRefs(core);
 
-        // Output security gate: scrub any secret-shaped values the model may have copied despite input redaction.
-        const scrubbed = redactStructuredStrings(core);
-        if (scrubbed.count > 0) {
-            redactionsApplied += scrubbed.count;
-            core = validateHandoffCore(JSON.stringify(scrubbed.value), "stop", allowedRefs);
-            logger.write("handoff_output_redacted", {redactions: scrubbed.count});
+        const normalizeCore = (value: HandoffCore, phase: string): HandoffCore => {
+            let normalized = pruneInternalRefs(preserveActiveHardConstraints(value, previousReports));
+            const scrubbed = redactStructuredStrings(normalized);
+            if (scrubbed.count > 0) {
+                redactionsApplied += scrubbed.count;
+                normalized = validateHandoffCore(JSON.stringify(scrubbed.value), "stop", allowedRefs);
+                logger.write("handoff_output_redacted", {phase, redactions: scrubbed.count});
+            }
+            return normalized;
+        };
+
+        const consolidatePrompt = consolidationPrompt({
+            fragments,
+            previousReports,
+            allowedEvidenceRefs: [...allowedRefs]
+        });
+        const consolidateHash = sha256String(`${HANDOFF_CORE_NORMALIZATION_VERSION}\0${consolidatePrompt}`);
+        const cachedCore = checkpoint.read("core-initial", consolidateHash, (value) => validateHandoffCore(JSON.stringify(value), "stop", allowedRefs));
+        if (cachedCore) {
+            core = normalizeCore(cachedCore, "handoff-consolidate-cache");
+            logger.write("checkpoint_reused", {artifact: "core-initial"});
+        } else {
+            core = normalizeCore(await completeHandoffCore(ctx, consolidatePrompt, allowedRefs, stats, "handoff-consolidate"), "handoff-consolidate");
+            checkpoint.write("core-initial", consolidateHash, core);
         }
 
-        review = await completeHandoffReview(ctx, handoffReviewPrompt({core, fragments, previousReports, allowedEvidenceRefs: [...allowedRefs]}), allowedRefs, stats);
-        if (!review.pass) {
-            logger.write("handoff_repair_started", {issues: review.issues.length});
-            core = await completeHandoffCore(ctx, handoffRepairPrompt({core, review, fragments, previousReports, allowedEvidenceRefs: [...allowedRefs]}), allowedRefs, stats, "handoff-repair");
-            core = preserveActiveHardConstraints(core, previousReports);
-            core = pruneInternalRefs(core);
-            const repaired = redactStructuredStrings(core);
-            if (repaired.count > 0) {
-                redactionsApplied += repaired.count;
-                core = validateHandoffCore(JSON.stringify(repaired.value), "stop", allowedRefs);
+        const initialReviewPrompt = handoffReviewPrompt({
+            core,
+            fragments,
+            previousReports,
+            allowedEvidenceRefs: [...allowedRefs]
+        });
+        const initialReviewHash = sha256String(initialReviewPrompt);
+        const cachedReview = checkpoint.read("review-initial", initialReviewHash, (value) => validateHandoffReview(JSON.stringify(value), "stop", allowedRefs));
+        if (cachedReview) {
+            review = cachedReview;
+            logger.write("checkpoint_reused", {artifact: "review-initial"});
+        } else {
+            review = await completeHandoffReview(ctx, initialReviewPrompt, allowedRefs, stats);
+            checkpoint.write("review-initial", initialReviewHash, review);
+        }
+
+        const reviewHistory: HandoffReview[] = [];
+        for (let round = 1; !review.pass && round <= MAX_HANDOFF_REPAIRS; round++) {
+            reviewHistory.push(review);
+            logger.write("handoff_repair_started", {round, issues: review.issues.length});
+            const repairReview: HandoffReview = {
+                ...review,
+                issues: reviewHistory.flatMap((item) => item.issues),
+                repairInstructions: reviewHistory.map((item) => item.repairInstructions).filter(Boolean).join("; "),
+            };
+            const repairInput = handoffRepairPrompt({
+                core,
+                review: repairReview,
+                fragments,
+                previousReports,
+                allowedEvidenceRefs: [...allowedRefs]
+            });
+            const repairHash = sha256String(`${HANDOFF_CORE_NORMALIZATION_VERSION}\0${repairInput}`);
+            const repairArtifact = round === 1 ? "core-repair" : `core-repair${round}`;
+            const cachedRepair = checkpoint.read(repairArtifact, repairHash, (value) => validateHandoffCore(JSON.stringify(value), "stop", allowedRefs));
+            if (cachedRepair) {
+                core = normalizeCore(cachedRepair, `handoff-repair${round}-cache`);
+                logger.write("checkpoint_reused", {artifact: repairArtifact});
+            } else {
+                core = normalizeCore(await completeHandoffCore(ctx, repairInput, allowedRefs, stats, `handoff-repair${round}`), `handoff-repair${round}`);
+                checkpoint.write(repairArtifact, repairHash, core);
             }
-            review = await completeHandoffReview(ctx, handoffReviewPrompt({core, fragments, previousReports, allowedEvidenceRefs: [...allowedRefs]}), allowedRefs, stats);
+
+            const reviewPrompt = handoffReviewPrompt({
+                core,
+                fragments,
+                previousReports,
+                allowedEvidenceRefs: [...allowedRefs]
+            });
+            const reviewHash = sha256String(reviewPrompt);
+            const reviewArtifact = round === 1 ? "review-final" : `review-final${round}`;
+            const cachedRoundReview = checkpoint.read(reviewArtifact, reviewHash, (value) => validateHandoffReview(JSON.stringify(value), "stop", allowedRefs));
+            if (cachedRoundReview) {
+                review = cachedRoundReview;
+                logger.write("checkpoint_reused", {artifact: reviewArtifact});
+            } else {
+                review = await completeHandoffReview(ctx, reviewPrompt, allowedRefs, stats);
+                checkpoint.write(reviewArtifact, reviewHash, review);
+            }
         }
         if (!review.pass) {
             const critical = review.issues.filter((issue) => issue.severity === "critical").map((issue) => issue.statement).join("；");
@@ -1873,7 +2150,7 @@ async function runHandoffCleanup(command: CleanupCommandOptions, ctx: ExtensionC
 
     const inputContentHash = crypto.createHash("sha256").update(inputSnapshots.map((item) => `${item.sourceId}:${item.sha256}`).join("\n")).digest("hex");
     const manifest: TextualCleanupManifest = {
-        schemaVersion: 4,
+        schemaVersion: hiddenHistory ? 5 : 4,
         cleanerVersion: CLEANER_VERSION,
         runId,
         createdAt: new Date().toISOString(),
@@ -1903,11 +2180,42 @@ async function runHandoffCleanup(command: CleanupCommandOptions, ctx: ExtensionC
             quality: report.quality.scores,
             parentReportIds,
         },
+        ...(hiddenHistory ? {
+            history: {
+                archiveId: hiddenHistory.manifest.archiveId,
+                schema: hiddenHistory.manifest.schema,
+                scope: hiddenHistory.manifest.scope,
+                exactSourceBytes: hiddenHistory.manifest.exactSourceBytes,
+                sourceCount: hiddenHistory.manifest.sourceCount,
+                recordCount: hiddenHistory.manifest.recordCount,
+            }
+        } : {}),
     };
     const title = handoffReportTitle(report);
-    const written = writeHandoffResultSession({loaded, body, report, title, runId, manifest, cwd: ctx.cwd, logger});
-    logger.write("handoff_published", {reportId: report.reportId, modelCalls: stats.modelCallCount, chunks: stats.chunkCount});
-    await finalizeAndSwitch({loaded, snapshotFiles: snapshot.files, outputPath: written.outputPath, snapshotDirectory: snapshot.directory, ctx, logger});
+    const written = writeHandoffResultSession({
+        loaded,
+        body,
+        report,
+        title,
+        runId,
+        manifest,
+        cwd: ctx.cwd,
+        logger,
+        history: hiddenHistory
+    });
+    logger.write("handoff_published", {
+        reportId: report.reportId,
+        modelCalls: stats.modelCallCount,
+        chunks: stats.chunkCount
+    });
+    await finalizeAndSwitch({
+        loaded,
+        snapshotFiles: snapshot.files,
+        outputPath: written.outputPath,
+        snapshotDirectory: snapshot.directory,
+        ctx,
+        logger
+    });
     if (archiveExplicitSources) {
         archiveExplicitHandoffSources({
             candidates,
@@ -1917,7 +2225,11 @@ async function runHandoffCleanup(command: CleanupCommandOptions, ctx: ExtensionC
             runId,
             logger,
         });
+        fs.rmSync(snapshot.directory, {recursive: true, force: true});
+        logger.write("snapshot_removed_after_source_move", {directory: snapshot.directory});
     }
+    checkpoint?.remove();
+    if (checkpoint) logger.write("checkpoint_removed", {checkpointKey: checkpoint.key});
 }
 
 function writeChunkPartsSession(options: {
@@ -1927,7 +2239,7 @@ function writeChunkPartsSession(options: {
     title: string;
     cwd: string;
     logger: RunLogger;
-}): {outputPath: string; sessionId: string} {
+}): { outputPath: string; sessionId: string } {
     const sessionId = crypto.randomUUID();
     const outputPath = path.join(path.dirname(options.loaded[0].candidate.path), sessionFileName(sessionId));
     const lines = buildChunkPartsSessionLines({
@@ -1940,7 +2252,12 @@ function writeChunkPartsSession(options: {
     });
     verifyChunkPartsSessionLines(lines, options.items.length, sessionId, options.manifest.outputContentHash);
     atomicWrite0600(outputPath, sessionJsonl(lines));
-    options.logger.write("output_written", {outputPath, sessionId, bytes: fs.statSync(outputPath).size, chunkPartCount: options.items.length});
+    options.logger.write("output_written", {
+        outputPath,
+        sessionId,
+        bytes: fs.statSync(outputPath).size,
+        chunkPartCount: options.items.length
+    });
     return {outputPath, sessionId};
 }
 
@@ -1970,11 +2287,19 @@ async function runSemanticCleanup(command: CleanupCommandOptions, ctx: Extension
     logger.write("source_mode", {hasUI: ctx.hasUI, mode: ctx.mode});
     // headless(print/json)模式:仍可执行清洗并落盘,只是不做会话切换。
     if (!ctx.model) throw new Error("capsule cleanup 需要当前模型");
-    logger.write("sources_resolved", {mode: "capsule", sourceCount: candidates.length, sourceIds: candidates.map((item) => item.id)});
+    logger.write("sources_resolved", {
+        mode: "capsule",
+        sourceCount: candidates.length,
+        sourceIds: candidates.map((item) => item.id)
+    });
 
     const snapshot = createSnapshot(candidates.map((source) => source.path), BACKUP_ROOT, runId);
     const snapshotPaths = snapshot.files.map((file) => path.join(snapshot.directory, file.file));
-    logger.write("snapshot_created", {directory: snapshot.directory, files: snapshot.files.length, timing: "before_cleanup"});
+    logger.write("snapshot_created", {
+        directory: snapshot.directory,
+        files: snapshot.files.length,
+        timing: "before_cleanup"
+    });
     const loaded = await loadSources(candidates, ctx, command.policy, true, logger, snapshotPaths);
     const semanticSources = loaded.map((source) => source.semantic).filter((source): source is SourceContext => Boolean(source));
     if (isDumpSourceTextEnabled()) {
@@ -2004,7 +2329,13 @@ async function runSemanticCleanup(command: CleanupCommandOptions, ctx: Extension
         schema: "clean-text/v1",
         sourceId: "semantic",
         sourceIndex: 0,
-        segments: [{kind: "checkpoint", text: generated.capsule.markdown, sourceOrder: 0, fidelity: "derived", sourceId: "semantic"}],
+        segments: [{
+            kind: "checkpoint",
+            text: generated.capsule.markdown,
+            sourceOrder: 0,
+            fidelity: "derived",
+            sourceId: "semantic"
+        }],
     };
     const result = cleanupDocuments([derived], semanticPolicy, 0);
     if (command.exportText) {
@@ -2021,7 +2352,11 @@ async function runSemanticCleanup(command: CleanupCommandOptions, ctx: Extension
         createdAt: new Date().toISOString(),
         mode: "capsule",
         directSources,
-        sourceSnapshots: snapshot.files.map((file, index) => ({sourceId: loaded[index].candidate.id, sha256: file.sha256, bytes: file.bytes})),
+        sourceSnapshots: snapshot.files.map((file, index) => ({
+            sourceId: loaded[index].candidate.id,
+            sha256: file.sha256,
+            bytes: file.bytes
+        })),
         sourceCount: loaded.length,
         sourceView: command.policy.sourceView,
         policy: semanticPolicy,
@@ -2038,8 +2373,24 @@ async function runSemanticCleanup(command: CleanupCommandOptions, ctx: Extension
         },
     };
     const title = generated.capsule.title || cleanTitle(loaded, "semantic");
-    const written = writeResultSession({loaded, result, policy: semanticPolicy, title, runId, manifest, cwd: ctx.cwd, logger});
-    await finalizeAndSwitch({loaded, snapshotFiles: snapshot.files, outputPath: written.outputPath, snapshotDirectory: snapshot.directory, ctx, logger});
+    const written = writeResultSession({
+        loaded,
+        result,
+        policy: semanticPolicy,
+        title,
+        runId,
+        manifest,
+        cwd: ctx.cwd,
+        logger
+    });
+    await finalizeAndSwitch({
+        loaded,
+        snapshotFiles: snapshot.files,
+        outputPath: written.outputPath,
+        snapshotDirectory: snapshot.directory,
+        ctx,
+        logger
+    });
 }
 
 export default function (pi: ExtensionAPI) {
@@ -2059,7 +2410,12 @@ export default function (pi: ExtensionAPI) {
                     await runNativeCompaction(ctx);
                     return;
                 }
-                logger.write("cleanup_started", {mode: command.mode, sourceView: command.policy.sourceView, sourceArgCount: command.sourceTokens.length, cleanerVersion: CLEANER_VERSION});
+                logger.write("cleanup_started", {
+                    mode: command.mode,
+                    sourceView: command.policy.sourceView,
+                    sourceArgCount: command.sourceTokens.length,
+                    cleanerVersion: CLEANER_VERSION
+                });
                 if (command.mode === "handoff" && command.sourceTokens.length === 1) {
                     await runSpecifiedNativeCompaction(command, ctx, runId, logger);
                     logger.write("cleanup_finished", {mode: command.mode});

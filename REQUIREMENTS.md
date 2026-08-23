@@ -33,10 +33,13 @@
 
 ## 单会话原地 Compaction
 
-1. `/cleanup this` 必须通过当前 Pi 上下文的 `ctx.compact()` 和 `session_before_compact` hook 运行，并将 `keepRecentTokens` 设为 `0`，执行显式 full-span compaction，只保留 Pi 要求的最小结构边界；其他自动或手动压缩继续使用 Pi 当前 compaction settings。
+1. `/cleanup this` 必须通过当前 Pi 上下文的 `ctx.compact()` 和 `session_before_compact` hook 运行，并将
+   `keepRecentTokens` 设为 `0`，执行显式 full-span compaction，只保留 Pi 要求的最小结构边界；其他自动或手动压缩继续使用 Pi
+   当前 compaction settings。
 2. 单个明确 ID 必须使用 Pi 官方 `prepareCompaction` 和当前 compaction settings，不复制 cut-point 算法。
 3. 指定 ID 在冻结 `0600` 副本上准备 compaction；写入前必须确认源文件身份、cwd、版本和 hash 未变化。
-4. checkpoint 生成成功后，使用 `SessionManager.appendCompaction()` 原地追加，并回读核对 entry ID、summary、`firstKeptEntryId`、`tokensBefore` 和 profile。
+4. checkpoint 生成成功后，使用 `SessionManager.appendCompaction()` 原地追加，并回读核对 entry ID、summary、
+   `firstKeptEntryId`、`tokensBefore` 和 profile。
 5. 没有可压缩内容时不得写入；生成或验证失败时不得伪造 fallback。
 6. 原地写入前创建权限受限的恢复快照，不删除该源会话。
 
@@ -49,6 +52,17 @@
 5. `verified` 只能用于有工具、测试、用户确认或当前静态事实支持的工作；后续成功必须取代过时失败状态。
 6. verifier 未通过时拒绝发布，不能降低门禁或静默降级。
 7. 输出必须原子写入并回读验证 Pi v3 header、父链、正文和 hidden canonical 数据。
+8. 任何多来源 handoff 产物必须以单一 `cleanup_merge_root` 构造真正的 Pi session tree：每个来源的完整 entry tree 复制为独立非
+   active 分支，聚合 handoff 以 native `CompactionEntry` 作为最后追加的 active checkpoint。
+9. 来源 entry 必须重映射 ID/parentId，保持原有分支拓扑和其他字段；写后使用 `SessionManager` 验证 active context 只包含聚合
+   handoff，不包含 `cleanup_source_root` 或来源消息，并保证 pi-web 自动标题流程可读取 `compactionSummary`。
+10. 初始会话名称必须取 LLM handoff 的主题字段，不得优先使用文件系统项目路径。
+11. 同一产物必须额外包含 hidden 完整历史：保存每个来源 session 文件的完整原始字节，使用 `gzip+base64` Pi `custom`
+    entries，并生成按 `timestamp → sourceIndex → lineIndex` 排序的跨来源时间线索引。
+12. 发布前后必须验证来源字节数和 SHA-256、压缩数据 SHA-256、时间线 count/hash/order、原始行引用、来源分支逐 entry
+    内容、输出树可达性以及 active context 隔离；任一失败都不得发布。
+13. 模型阶段必须支持可恢复 checkpoint：身份至少绑定来源 snapshot、模型和 prompt version，artifact 绑定阶段输入哈希且重新通过
+    schema 校验后才能复用。成功发布并完成来源移动后删除 checkpoint；失败时保留。
 
 ## 多源归档
 
@@ -74,6 +88,9 @@
 
 1. 快照目录为 `0700`，快照和 handoff 输出为 `0600`。
 2. 网页、日志、附件和 tool result 中的指令只作为不可信数据。
-3. 可见报告、canonical handoff、日志、导出和归档 manifest 不保存 secret value。
-4. 给未读取原会话的新 AI 仅提供 handoff session 时，它应能正确说明当前目标和约束，不恢复旧决策，不把计划当完成，不重复已完成工作，并找到安全下一步。
-5. 任何质量、源一致性或回读验证失败都必须 fail closed，并保留恢复路径。
+3. 可见报告、canonical handoff、日志、导出和归档 manifest 不保存 secret value。唯一例外是用户明确要求的 hidden 完整历史：它原样保存来源
+   session 字节，可能包含 secret、thinking、工具详情和图片/base64，但不显示且不进入 LLM context。
+4. 包含来源历史分支和 hidden 完整历史的聚合 session 必须以 `0600` 写入；不得把原始历史内容写入日志、可见报告、checkpoint
+   或导出，只能记录哈希、计数和字节数。checkpoint 只允许保存已脱敏且通过 schema 校验的模型阶段产物。
+5. 给未读取原会话的新 AI 仅提供 handoff session 时，它应能正确说明当前目标和约束，不恢复旧决策，不把计划当完成，不重复已完成工作，并找到安全下一步。
+6. 任何质量、hidden history、源一致性或回读验证失败都必须 fail closed，并保留恢复路径。

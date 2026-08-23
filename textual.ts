@@ -142,7 +142,7 @@ export function cleanupPolicyHash(policy: CleanupPolicy): string {
     return sha256Text(JSON.stringify(canonicalObject(policy)));
 }
 
-function inFenceToggle(line: string, current: {marker?: string}): void {
+function inFenceToggle(line: string, current: { marker?: string }): void {
     const match = line.match(/^\s*(```+|~~~+)/);
     if (!match) return;
     const marker = match[1][0];
@@ -154,7 +154,7 @@ function inFenceToggle(line: string, current: {marker?: string}): void {
 export function canonicalizeText(input: string): string {
     const normalized = input.replace(/\r\n?/g, "\n").normalize("NFC");
     const lines = normalized.split("\n");
-    const fence: {marker?: string} = {};
+    const fence: { marker?: string } = {};
     const out: string[] = [];
     let blankRun = 0;
 
@@ -347,7 +347,7 @@ function readStoredIr(entry: EntryLike): StoredCleanIr | undefined {
     };
 }
 
-function latestStoredIr(branchEntries: readonly unknown[]): {index: number; ir: StoredCleanIr} | undefined {
+function latestStoredIr(branchEntries: readonly unknown[]): { index: number; ir: StoredCleanIr } | undefined {
     for (let index = branchEntries.length - 1; index >= 0; index--) {
         const raw = branchEntries[index];
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
@@ -379,7 +379,10 @@ export interface DocumentFromEntriesOptions {
     policy: CleanupPolicy;
 }
 
-export function documentFromEntries(options: DocumentFromEntriesOptions): {document: CleanDocument; reusedCanonicalIr: boolean} {
+export function documentFromEntries(options: DocumentFromEntriesOptions): {
+    document: CleanDocument;
+    reusedCanonicalIr: boolean
+} {
     const header = options.header && typeof options.header === "object" && !Array.isArray(options.header) ? options.header as HeaderLike : undefined;
     const stored = latestStoredIr(options.branchEntries);
     let segments: VisibleSegment[];
@@ -390,7 +393,10 @@ export function documentFromEntries(options: DocumentFromEntriesOptions): {docum
         // the new tail created after cleanup_ir. This is what makes second cleanup deterministic.
         const base = cleanIrToSegments(stored.ir, options.sourceId);
         const tail = options.branchEntries.slice(stored.index + 1);
-        const tailSegments = projectEntries(tail, options.sourceId, {...options.policy, sourceView: "active-branch"}, base.length);
+        const tailSegments = projectEntries(tail, options.sourceId, {
+            ...options.policy,
+            sourceView: "active-branch"
+        }, base.length);
         segments = [...base, ...tailSegments];
         reusedCanonicalIr = true;
     } else {
@@ -412,7 +418,10 @@ export function documentFromEntries(options: DocumentFromEntriesOptions): {docum
     };
 }
 
-interface RedactResult {text: string; count: number}
+interface RedactResult {
+    text: string;
+    count: number
+}
 
 /** Security-focused redaction. It intentionally avoids broad numeric/email regexes. */
 export function redactSecrets(text: string): RedactResult {
@@ -560,17 +569,26 @@ function removeBoundaryNearDuplicates(segments: VisibleSegment[], diagnostics: C
 
 function segmentLabel(kind: VisibleKind): string {
     switch (kind) {
-        case "user": return "用户";
-        case "assistant": return "助手";
-        case "tool": return "工具";
-        case "checkpoint": return "上下文";
-        case "break": return "断点";
+        case "user":
+            return "用户";
+        case "assistant":
+            return "助手";
+        case "tool":
+            return "工具";
+        case "checkpoint":
+            return "上下文";
+        case "break":
+            return "断点";
     }
 }
 
 function isoIfValid(milliseconds?: number): string | undefined {
     if (milliseconds === undefined || !Number.isFinite(milliseconds)) return undefined;
-    try { return new Date(milliseconds).toISOString(); } catch { return undefined; }
+    try {
+        return new Date(milliseconds).toISOString();
+    } catch {
+        return undefined;
+    }
 }
 
 export function renderCanonical(document: CleanDocument, policy: CleanupPolicy): string {
@@ -595,7 +613,12 @@ export function hashDocuments(documents: readonly CleanDocument[]): string {
         sourceId: doc.sourceId,
         parentSession: doc.parentSession,
         createdAt: doc.createdAt,
-        segments: doc.segments.map((item) => ({kind: item.kind, text: canonicalizeText(item.text), incomplete: Boolean(item.incomplete), fidelity: item.fidelity})),
+        segments: doc.segments.map((item) => ({
+            kind: item.kind,
+            text: canonicalizeText(item.text),
+            incomplete: Boolean(item.incomplete),
+            fidelity: item.fidelity
+        })),
     }));
     return sha256Text(JSON.stringify(canonicalObject(canonical)));
 }
@@ -696,11 +719,23 @@ export function parseCanonicalBody(body: string, sourceId = "clean"): VisibleSeg
     const flush = () => {
         if (!currentKind) return;
         const text = canonicalizeText(currentLines.join("\n"));
-        if (text) segments.push({kind: currentKind, text, sourceOrder: segments.length, fidelity: currentKind === "checkpoint" ? "derived" : "verbatim", sourceId});
+        if (text) segments.push({
+            kind: currentKind,
+            text,
+            sourceOrder: segments.length,
+            fidelity: currentKind === "checkpoint" ? "derived" : "verbatim",
+            sourceId
+        });
         currentKind = undefined;
         currentLines = [];
     };
-    const kindMap: Record<string, VisibleKind> = {"用户": "user", "助手": "assistant", "工具": "tool", "上下文": "checkpoint", "断点": "break"};
+    const kindMap: Record<string, VisibleKind> = {
+        "用户": "user",
+        "助手": "assistant",
+        "工具": "tool",
+        "上下文": "checkpoint",
+        "断点": "break"
+    };
     for (const line of lines) {
         const match = line.match(header);
         if (match && (segments.length > 0 || currentKind || currentLines.every((value) => !value.trim()))) {
@@ -713,6 +748,12 @@ export function parseCanonicalBody(body: string, sourceId = "clean"): VisibleSeg
         else currentLines.push(line);
     }
     flush();
-    if (segments.length === 0) return [{kind: "checkpoint", text: normalized, sourceOrder: 0, fidelity: "derived", sourceId}];
+    if (segments.length === 0) return [{
+        kind: "checkpoint",
+        text: normalized,
+        sourceOrder: 0,
+        fidelity: "derived",
+        sourceId
+    }];
     return segments;
 }

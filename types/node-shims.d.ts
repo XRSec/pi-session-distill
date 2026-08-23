@@ -5,6 +5,7 @@ declare module "node:fs/promises";
 declare module "node:path";
 declare module "node:os";
 declare module "node:url";
+declare module "node:zlib";
 declare module "node:test";
 declare module "node:assert/strict";
 declare module "node:assert";
@@ -45,7 +46,9 @@ declare module "@earendil-works/pi-coding-agent" {
                 errorMessage?: unknown;
             }>;
         };
-        switchSession(path: string, callbacks?: { withSession?: (ctx: ExtensionCommandContext) => Promise<void> }): Promise<{ cancelled: boolean }>;
+        switchSession(path: string, callbacks?: {
+            withSession?: (ctx: ExtensionCommandContext) => Promise<void>
+        }): Promise<{ cancelled: boolean }>;
     };
 
     export interface RegisterCommandOptions {
@@ -55,7 +58,9 @@ declare module "@earendil-works/pi-coding-agent" {
 
     export interface ExtensionAPI {
         registerCommand(name: string, spec: RegisterCommandOptions): void;
+
         registerCommand(name: string, callback: (...args: any[]) => void): void;
+
         registerCommand(name: string, handler: (...args: any[]) => void): void;
     }
 
@@ -68,7 +73,9 @@ declare module "@earendil-works/pi-coding-agent" {
     }
 
     export function convertToLlm(messages: unknown): unknown;
+
     export function serializeConversation(conversation: unknown): string;
+
     export const SessionManager: {
         open(filePath: string): any;
         list(cwd: string): Promise<SessionEntry[]>;

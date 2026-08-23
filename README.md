@@ -4,23 +4,31 @@
 
 ## 行为矩阵
 
-| 命令 | 结果 | 源会话处理 |
-|---|---|---|
-| `/cleanup this` | 在当前会话原地追加 native `CompactionEntry` | 保留 |
-| `/cleanup <session-id>` | 在指定历史会话原地追加 native `CompactionEntry` | 保留 |
+| 命令                       | 结果                                                           | 源会话处理                                                            |
+|----------------------------|----------------------------------------------------------------|-----------------------------------------------------------------------|
+| `/cleanup this`            | 在当前会话原地追加 native `CompactionEntry`                    | 保留                                                                  |
+| `/cleanup <session-id>`    | 在指定历史会话原地追加 native `CompactionEntry`                | 保留                                                                  |
 | `/cleanup <id> <id> [...]` | 生成并验证一个新的聚合 handoff session，并嵌入 hidden 完整历史 | 成功发布且源未变化后，移动到 `/tmp/session-distill-sources-<run-id>/` |
-| `/cleanup` | 交互选择并生成 handoff | 始终保留 |
-| 任意 `--textual` 调用 | 仅写入 `/tmp/session-distill-textual-*.md` | 始终保留且不修改 |
+| `/cleanup`                 | 交互选择并生成 handoff                                         | 始终保留                                                              |
+| 任意 `--textual` 调用      | 仅写入 `/tmp/session-distill-textual-*.md`                     | 始终保留且不修改                                                      |
 
-`/cleanup this` 使用 Pi 实际的 `CompactionPreparation`。单个明确 ID 使用 Pi 官方 `prepareCompaction` 对冻结副本计算 cut point，再将经过回读验证的 `CompactionEntry` 追加到原会话；写入前会创建 `0700/0600` 安全快照。
+`/cleanup this` 使用 Pi 实际的 `CompactionPreparation`。单个明确 ID 使用 Pi 官方 `prepareCompaction` 对冻结副本计算 cut
+point，再将经过回读验证的 `CompactionEntry` 追加到原会话；写入前会创建 `0700/0600` 安全快照。
 
-多个明确 ID 使用冻结 active branch、当前模型、canonical handoff 和质量 verifier。聚合产物还会以 Pi `custom` entries 嵌入每个来源的完整 session tree 原始字节和跨来源时间线索引；这些 entries 不显示、也不进入 LLM context。只有质量门禁、hidden history 校验、原子写入、回读以及全部源文件一致性检查都通过后，才会原子移动源文件。归档目录为 `0700`，文件和 `manifest.json` 为 `0600`；不永久删除源文件。失败时不发布无效结果，也不会把尚未移动的源文件标记为成功。
+多个明确 ID 使用冻结 active branch、当前模型、canonical handoff 和质量 verifier。聚合产物是一棵真正的 Pi session
+tree：每个来源完整 session tree 被复制为独立非 active 分支，聚合 handoff 以 native `CompactionEntry` 作为最后追加的 active
+checkpoint。正常会话和 LLM context 只看到 handoff；pi-web“完整历史”可以展开来源分支，并可基于该 checkpoint 使用“生成标题”。会话初始名称取
+LLM handoff 的主题，不使用文件系统项目路径。原始 JSONL 字节还会以 hidden Pi `custom` entries
+保存并建立跨来源时间线索引。只有质量门禁、树结构、hidden history、原子写入、回读以及全部源文件一致性检查都通过后，才会把来源临时移动到
+`/tmp/session-distill-sources-<run-id>/`。失败时不发布无效结果，也不移动来源。
 
 ## 接管 Pi 压缩事件
 
-无需额外配置。扩展加载后会自动注册 Pi 的 `session_before_compact` hook，点击压缩、执行 `/compact` 或触发自动压缩时都会由 `session-distill` 接管摘要生成；失败时回退到 Pi 原生摘要。这些入口继续使用 Pi 当前的压缩设置；显式执行 `/cleanup this` 时会进行 full-span compaction，将近期原文保留窗口设为 `0`，只保留 Pi 要求的最小结构边界。
+无需额外配置。扩展加载后会自动注册 Pi 的 `session_before_compact` hook，点击压缩、执行 `/compact` 或触发自动压缩时都会由
+`session-distill` 接管摘要生成；失败时回退到 Pi 原生摘要。这些入口继续使用 Pi 当前的压缩设置；显式执行 `/cleanup this` 时会进行
+full-span compaction，将近期原文保留窗口设为 `0`，只保留 Pi 要求的最小结构边界。
 
-## 命令行(非交互)用法
+## 命令行 (非交互)用法
 
 在脚本或 CI 中,可用 `pi` 的非交互模式直接触发 `/cleanup`,结果原文直接打印到 stdout。两个常用形态:
 
@@ -34,10 +42,12 @@ pi --no-session "/cleanup 15e1ab4f-2b8d-47c2-a1c0-f0097e18e110" --print
 
 两者都会把命令输出打印到 stdout 后退出;区别在于:
 
-- `--session <id>`:载入目标会话,`/cleanup this` 是针对**当前会话**(即该 ID)原地追加 native `CompactionEntry`。
-- `--no-session`:启动 ephemeral 临时会话,`/cleanup <session-id>` 是针对**指定历史会话**执行同一原地 compaction,不会保留这次的临时会话。
+- `--session <id>`:载入目标会话,`/cleanup this` 是针对 **当前会话**(即该 ID)原地追加 native `CompactionEntry`。
+- `--no-session`:启动 ephemeral 临时会话,`/cleanup <session-id>` 是针对 **指定历史会话**执行同一原地
+  compaction,不会保留这次的临时会话。
 
-单会话清理(`/cleanup this` 或 `/cleanup <session-id>`)适合这种非交互调用;多会话聚合 handoff 需要交互确认/移动源文件,建议在交互式 TUI 中使用(或先用 `--textual` 离线检查)。
+单会话清理 (`/cleanup this` 或 `/cleanup <session-id>`)适合这种非交互调用;多会话聚合 handoff 需要交互确认/移动源文件,建议在交互式
+TUI 中使用 (或先用 `--textual` 离线检查)。
 
 ## Textual 检查
 
@@ -46,7 +56,8 @@ pi --no-session "/cleanup 15e1ab4f-2b8d-47c2-a1c0-f0097e18e110" --print
 /cleanup <session-id> [session-id...] --textual
 ```
 
-`--textual` 不调用清洗模型、不创建或切换 session，也不修改或移动任何源 session。`this` 内容来自 Pi 实际 `CompactionPreparation`；明确 ID 使用冻结 active branch 和 Pi 官方 `convertToLlm()` + `serializeConversation()` 生成离线诊断输入。
+`--textual` 不调用清洗模型、不创建或切换 session，也不修改或移动任何源 session。`this` 内容来自 Pi 实际
+`CompactionPreparation`；明确 ID 使用冻结 active branch 和 Pi 官方 `convertToLlm()` + `serializeConversation()` 生成离线诊断输入。
 
 ## Handoff 输入与输出
 
@@ -64,13 +75,30 @@ pi --no-session "/cleanup 15e1ab4f-2b8d-47c2-a1c0-f0097e18e110" --print
 
 - `cleanup_history_manifest`：归档范围、来源哈希、记录数和全局时间线哈希；
 - `cleanup_history_source_chunk`：每个来源 session 文件的原始字节，经 `gzip+base64` 分块；
-- `cleanup_history_timeline_chunk`：整个 session tree 的记录索引，按 `timestamp → sourceIndex → lineIndex` 稳定排序，并记录每一原始 JSONL 行的 SHA-256。
+- `cleanup_history_timeline_chunk`：整个 session tree 的记录索引，按 `timestamp → sourceIndex → lineIndex` 稳定排序，并记录每一原始
+  JSONL 行的 SHA-256。
 
-写入前后都会重新拼接、解压并核对来源字节数、来源 SHA-256、压缩数据 SHA-256、时间线顺序、时间线哈希、行引用和输出父链。该历史不会进入模型上下文，但它是**原样本地归档**：源会话中的 Token、Cookie、thinking、工具详情、图片/base64 等也会保留。聚合 session 因此必须继续按敏感文件管理，并保持 `0600` 权限。
+写入前后都会重新拼接、解压并核对来源字节数、来源 SHA-256、压缩数据 SHA-256、时间线顺序、时间线哈希、行引用和输出树。来源 entry
+的 ID/parentId 会安全重映射到聚合文件，但原有分支拓扑和其余字段保持不变。该历史不会进入 active 模型上下文，但它是
+**原样本地归档**：源会话中的 Token、Cookie、thinking、工具详情、图片/base64 等也会保留。聚合 session 因此必须继续按敏感文件管理，并保持
+`0600` 权限。
+
+## 可恢复 Checkpoint
+
+模型阶段产物保存在：
+
+```text
+~/.pi/agent/session-distill-checkpoints/<checkpoint-key>/
+```
+
+checkpoint key 由来源 snapshot SHA-256、模型和 prompt version 决定；每个 artifact 再核对阶段输入哈希。已经通过 schema
+校验且输入哈希完全相同的 fragment、consolidation、review 和 repair 可在同模型、同 prompt version 下跨 append-only snapshot
+变化复用。checkpoint 和 artifact 权限分别为 `0700`/`0600`，成功发布且来源移动完成后自动删除；失败时保留用于继续。来源移动
+manifest 使用原子 `0600` 替换更新，完成后冻结快照自动删除。
 
 ## 安装
 
-推荐方式(需要已安装 Pi):
+推荐方式 (需要已安装 Pi):
 
 ```text
 pi install git:github.com/XRSec/pi-session-distill

@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import {DEFAULT_POLICY, cleanupDocuments, mergePolicy, type SourceView} from "../textual.ts";
+import {cleanupDocuments, DEFAULT_POLICY, mergePolicy, type SourceView} from "../textual.ts";
 import {standaloneDocument} from "../standalone.ts";
 
 const args = process.argv.slice(2);

@@ -157,15 +157,15 @@ export interface AgentHandoffReport extends HandoffCore {
     evidence: HandoffEvidence[];
     provenance: {
         parentReportIds: string[];
-        inputSnapshots: Array<{sourceId: string; sha256: string; bytes: number}>;
-        transforms: Array<{name: string; version: string; model?: string; promptVersion?: string}>;
+        inputSnapshots: Array<{ sourceId: string; sha256: string; bytes: number }>;
+        transforms: Array<{ name: string; version: string; model?: string; promptVersion?: string }>;
         mergePolicy: string;
-        generatedBy: {agent: string; model?: string};
+        generatedBy: { agent: string; model?: string };
     };
     security: {
         classification: "internal";
         redactionsApplied: number;
-        promptInjectionFlags: Array<{sourceRef: string; severity: "high" | "medium" | "low"; summary: string}>;
+        promptInjectionFlags: Array<{ sourceRef: string; severity: "high" | "medium" | "low"; summary: string }>;
     };
     quality: {
         verifierPass: boolean;
@@ -216,9 +216,12 @@ function stableId(prefix: string, value: string): string {
     return `${prefix}-${sha256(value.trim().toLowerCase()).slice(0, 10)}`;
 }
 
-function canonicalize(value: unknown): unknown {
+type CanonicalValue = null | boolean | number | string | CanonicalValue[] | { [key: string]: CanonicalValue };
+
+function canonicalize(value: unknown): CanonicalValue {
+    if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") return value;
     if (Array.isArray(value)) return value.map(canonicalize);
-    if (!value || typeof value !== "object") return value;
+    if (typeof value !== "object") throw new Error(`无法 canonicalize ${typeof value}`);
     const object = value as Record<string, unknown>;
     return Object.fromEntries(Object.keys(object).sort().map((key) => [key, canonicalize(object[key])]));
 }
@@ -270,7 +273,10 @@ function extractJsonObject(raw: string): Record<string, unknown> | null {
                 else if (ch === '"') inString = false;
                 continue;
             }
-            if (ch === '"') { inString = true; continue; }
+            if (ch === '"') {
+                inString = true;
+                continue;
+            }
             if (ch === "{") depth++;
             else if (ch === "}") {
                 depth--;
@@ -478,7 +484,7 @@ function kindDescription(kind: "unsupported_claim" | "missing_state" | "missing_
     };
     if (typeof raw === "string" && raw.trim()) return raw.trim().slice(0, 1800);
     if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-        const v = raw as {statement?: unknown; description?: unknown; detail?: unknown; message?: unknown};
+        const v = raw as { statement?: unknown; description?: unknown; detail?: unknown; message?: unknown };
         for (const field of [v.statement, v.description, v.detail, v.message]) {
             if (typeof field === "string" && field.trim()) return field.trim().slice(0, 1800);
         }
@@ -924,7 +930,11 @@ function looseStringArray(value: unknown, name: string, maxItems = 100, maxText 
 }
 
 function safeStringify(value: unknown): string {
-    try { return JSON.stringify(value); } catch { return String(value); }
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
 }
 
 function evidenceRefs(value: unknown, name: string, allowedEvidenceRefs: Set<string>): string[] {
@@ -1046,7 +1056,9 @@ export function validateHandoffFragment(raw: string, stopReason: string, expecte
     };
 }
 
-function validateCoreObject(root: Record<string, unknown>, allowedEvidenceRefs: Set<string>): HandoffCore & {rawIds: Map<string, string>} {
+function validateCoreObject(root: Record<string, unknown>, allowedEvidenceRefs: Set<string>): HandoffCore & {
+    rawIds: Map<string, string>
+} {
     const rawIds = new Map<string, string>();
     const scope = obj(root.scope, "scope");
     const executiveState = obj(root.executiveState, "executiveState");
@@ -1056,7 +1068,8 @@ function validateCoreObject(root: Record<string, unknown>, allowedEvidenceRefs: 
         const o = obj(item, `constraints[${index}]`);
         const statement = str(o.statement, `constraints[${index}].statement`, 1800);
         const id = stableId("CON", statement);
-        const rawId = optionalRawId(o.id); if (rawId) rawIds.set(rawId, id);
+        const rawId = optionalRawId(o.id);
+        if (rawId) rawIds.set(rawId, id);
         rawIds.set(statement, id);
         return {
             id,
@@ -1075,7 +1088,8 @@ function validateCoreObject(root: Record<string, unknown>, allowedEvidenceRefs: 
         const ev = obj(e, where);
         const statement = str(ev.statement, `${where}.statement`, 1800);
         const id = stableId("EVT", `${ev.kind}\n${statement}`);
-        const rawId = optionalRawId(ev.id); if (rawId) rawIds.set(rawId, id);
+        const rawId = optionalRawId(ev.id);
+        if (rawId) rawIds.set(rawId, id);
         rawIds.set(statement, id);
         return {
             id,
@@ -1089,7 +1103,9 @@ function validateCoreObject(root: Record<string, unknown>, allowedEvidenceRefs: 
     let flatEvents: HandoffEvent[] = [];
     for (const item of rawTimeline) {
         // 兼容两种模型结构:phase 形(含 events 数组)或扁平 event 形(含 kind/statement)。
-        if (item && typeof item === "object" && !Array.isArray(item) && Array.isArray((item as {events?: unknown}).events)) {
+        if (item && typeof item === "object" && !Array.isArray(item) && Array.isArray((item as {
+            events?: unknown
+        }).events)) {
             const o = item as Record<string, unknown>;
             const summary = str(o.summary ?? "", `timeline.summary`, 2500, true);
             const title = normalizedPhaseTitle(o.title, `timeline.title`, `阶段 ${timeline.length + flatEvents.length + 1}`);
@@ -1114,7 +1130,8 @@ function validateCoreObject(root: Record<string, unknown>, allowedEvidenceRefs: 
         const o = obj(item, `decisions[${index}]`);
         const statement = str(o.statement, `decisions[${index}].statement`, 1800);
         const id = stableId("DEC", statement);
-        const rawId = optionalRawId(o.id); if (rawId) rawIds.set(rawId, id);
+        const rawId = optionalRawId(o.id);
+        if (rawId) rawIds.set(rawId, id);
         rawIds.set(statement, id);
         return {
             id,
@@ -1132,7 +1149,8 @@ function validateCoreObject(root: Record<string, unknown>, allowedEvidenceRefs: 
         const o = obj(item, `completedWork[${index}]`);
         const statement = str(o.statement, `completedWork[${index}].statement`, 1800);
         const id = stableId("WRK", statement);
-        const rawId = optionalRawId(o.id); if (rawId) rawIds.set(rawId, id);
+        const rawId = optionalRawId(o.id);
+        if (rawId) rawIds.set(rawId, id);
         rawIds.set(statement, id);
         const verification = obj(o.verification, `completedWork[${index}].verification`);
         return {
@@ -1154,7 +1172,8 @@ function validateCoreObject(root: Record<string, unknown>, allowedEvidenceRefs: 
         const o = obj(item, `openItems[${index}]`);
         const statement = str(o.statement, `openItems[${index}].statement`, 1800);
         const id = stableId("OPN", statement);
-        const rawId = optionalRawId(o.id); if (rawId) rawIds.set(rawId, id);
+        const rawId = optionalRawId(o.id);
+        if (rawId) rawIds.set(rawId, id);
         rawIds.set(statement, id);
         return {
             id,
@@ -1171,7 +1190,8 @@ function validateCoreObject(root: Record<string, unknown>, allowedEvidenceRefs: 
         const o = obj(item, `resources[${index}]`);
         const locator = str(o.locator, `resources[${index}].locator`, 1800);
         const id = stableId("RES", locator);
-        const rawId = optionalRawId(o.id); if (rawId) rawIds.set(rawId, id);
+        const rawId = optionalRawId(o.id);
+        if (rawId) rawIds.set(rawId, id);
         rawIds.set(locator, id);
         return {
             id,
@@ -1188,7 +1208,8 @@ function validateCoreObject(root: Record<string, unknown>, allowedEvidenceRefs: 
         const titleValue = o.title ?? o.statement;
         const title = str(titleValue, `actions[${index}].title/statement`, 1000);
         const id = stableId("ACT", title);
-        const rawId = optionalRawId(o.id); if (rawId) rawIds.set(rawId, id);
+        const rawId = optionalRawId(o.id);
+        if (rawId) rawIds.set(rawId, id);
         rawIds.set(title, id);
         return {
             id,
@@ -1209,7 +1230,8 @@ function validateCoreObject(root: Record<string, unknown>, allowedEvidenceRefs: 
         const o = obj(item, `claims[${index}]`);
         const statement = str(o.statement, `claims[${index}].statement`, 1800);
         const id = stableId("CLM", statement);
-        const rawId = optionalRawId(o.id); if (rawId) rawIds.set(rawId, id);
+        const rawId = optionalRawId(o.id);
+        if (rawId) rawIds.set(rawId, id);
         rawIds.set(statement, id);
         return {
             id,
@@ -1273,9 +1295,23 @@ export function validateHandoffCore(raw: string, stopReason: string, allowedEvid
  * cannot disappear merely because the model omitted it. Removal requires an
  * explicit supersession/revocation in the candidate constraint ledger.
  */
+function normalizedConstraintText(value: string): string {
+    return value.trim().toLowerCase().replace(/[\s，。；：、“”‘’（）()]+/g, "");
+}
+
+function explicitlySupersedes(candidate: HandoffConstraint, oldId: string | undefined, oldStatement: string): boolean {
+    if (!candidate.supersedes || candidate.evidenceRefs.length === 0) return false;
+    if (oldId && candidate.supersedes === oldId) return true;
+    const supersedes = normalizedConstraintText(candidate.supersedes);
+    const statement = normalizedConstraintText(oldStatement);
+    if (supersedes === statement) return true;
+    if (Math.min(supersedes.length, statement.length) < 8) return false;
+    return statement.includes(supersedes) || supersedes.includes(statement);
+}
+
 export function preserveActiveHardConstraints(core: HandoffCore, previousReports: AgentHandoffReport[]): HandoffCore {
     const result = structuredClone(core);
-    const normalize = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
+    const normalize = normalizedConstraintText;
     const candidateById = new Map<string, HandoffConstraint[]>();
     const candidateByStatement = new Map<string, HandoffConstraint[]>();
     for (const item of result.constraints) {
@@ -1302,8 +1338,7 @@ export function preserveActiveHardConstraints(core: HandoffCore, previousReports
             (candidate.status === "superseded" || candidate.status === "revoked") && candidate.evidenceRefs.length > 0
         );
         const explicitSupersession = result.constraints.some((candidate) =>
-            candidate.supersedes && candidate.evidenceRefs.length > 0 &&
-            (candidate.supersedes === item.id || normalize(candidate.supersedes) === normalize(item.statement))
+            explicitlySupersedes(candidate, item.id, item.statement)
         );
         if (retained || explicitRemoval || explicitSupersession) continue;
         result.constraints.push(item);
@@ -1390,7 +1425,10 @@ function referencedEvidenceIds(core: HandoffCore): Set<string> {
     core.constraints.forEach((item) => add(item.evidenceRefs));
     core.timeline.forEach((phase) => phase.events.forEach((event) => add(event.evidenceRefs)));
     core.decisions.forEach((item) => add(item.evidenceRefs));
-    core.completedWork.forEach((item) => { add(item.evidenceRefs); add(item.verification.evidenceRefs); });
+    core.completedWork.forEach((item) => {
+        add(item.evidenceRefs);
+        add(item.verification.evidenceRefs);
+    });
     core.openItems.forEach((item) => add(item.evidenceRefs));
     core.actions.forEach((item) => add(item.evidenceRefs));
     core.claims.forEach((item) => add(item.evidenceRefs));
@@ -1431,7 +1469,12 @@ export function assembleHandoffReport(options: {
             parentReportIds: [...new Set(options.parentReportIds)].filter((id) => id !== reportId),
             inputSnapshots: options.inputSnapshots,
             transforms: [
-                {name: "agent-handoff-extract-consolidate-verify", version: "1.0.0", model: options.model, promptVersion: options.promptVersion},
+                {
+                    name: "agent-handoff-extract-consolidate-verify",
+                    version: "1.0.0",
+                    model: options.model,
+                    promptVersion: options.promptVersion
+                },
                 {name: "deterministic-markdown-renderer", version: HANDOFF_RENDERER_VERSION},
             ],
             mergePolicy: "canonical-ledger merge; explicit supersession; verified state > explicit user constraint > tool evidence > assistant report > inference",
@@ -1451,8 +1494,7 @@ export function assembleHandoffReport(options: {
     };
 }
 
-export 
-const INTERNAL_ID_RE = /\b(ACT|DEC|OPN|CON|CLM|WRK|PHS|EVT|RES|EVD)-[A-Za-z0-9]{4,}\b/g;
+export const INTERNAL_ID_RE = /\b(ACT|DEC|OPN|CON|CLM|WRK|PHS|EVT|RES|EVD)-[A-Za-z0-9]{4,}\b/g;
 
 /**
  * 从 actions[].preconditions 等自由文本中剔除指向不存在内部 ID 的引用。
@@ -1524,19 +1566,41 @@ export function validateAgentHandoffReport(value: unknown): AgentHandoffReport {
             inputSnapshots: arr(provenance.inputSnapshots, "provenance.inputSnapshots", 100).map((item, index) => {
                 const o = obj(item, `provenance.inputSnapshots[${index}]`);
                 if (typeof o.bytes !== "number" || !Number.isInteger(o.bytes) || o.bytes < 0) throw new Error(`provenance.inputSnapshots[${index}].bytes 非法`);
-                return {sourceId: str(o.sourceId, `provenance.inputSnapshots[${index}].sourceId`, 300), sha256: str(o.sha256, `provenance.inputSnapshots[${index}].sha256`, 128), bytes: o.bytes};
+                return {
+                    sourceId: str(o.sourceId, `provenance.inputSnapshots[${index}].sourceId`, 300),
+                    sha256: str(o.sha256, `provenance.inputSnapshots[${index}].sha256`, 128),
+                    bytes: o.bytes
+                };
             }),
             transforms: arr(provenance.transforms, "provenance.transforms", 50).map((item, index) => {
                 const o = obj(item, `provenance.transforms[${index}]`);
-                return {name: str(o.name, `provenance.transforms[${index}].name`, 500), version: str(o.version, `provenance.transforms[${index}].version`, 100), model: nullableStr(o.model, `provenance.transforms[${index}].model`, 500) ?? undefined, promptVersion: nullableStr(o.promptVersion, `provenance.transforms[${index}].promptVersion`, 200) ?? undefined};
+                return {
+                    name: str(o.name, `provenance.transforms[${index}].name`, 500),
+                    version: str(o.version, `provenance.transforms[${index}].version`, 100),
+                    model: nullableStr(o.model, `provenance.transforms[${index}].model`, 500) ?? undefined,
+                    promptVersion: nullableStr(o.promptVersion, `provenance.transforms[${index}].promptVersion`, 200) ?? undefined
+                };
             }),
             mergePolicy: str(provenance.mergePolicy, "provenance.mergePolicy", 2500),
-            generatedBy: (() => { const o = obj(provenance.generatedBy, "provenance.generatedBy"); return {agent: str(o.agent, "provenance.generatedBy.agent", 500), model: nullableStr(o.model, "provenance.generatedBy.model", 500) ?? undefined}; })(),
+            generatedBy: (() => {
+                const o = obj(provenance.generatedBy, "provenance.generatedBy");
+                return {
+                    agent: str(o.agent, "provenance.generatedBy.agent", 500),
+                    model: nullableStr(o.model, "provenance.generatedBy.model", 500) ?? undefined
+                };
+            })(),
         },
         security: {
             classification: "internal",
             redactionsApplied: typeof security.redactionsApplied === "number" ? security.redactionsApplied : 0,
-            promptInjectionFlags: arr(security.promptInjectionFlags ?? [], "security.promptInjectionFlags", 100).map((item, index) => { const o = obj(item, `security.promptInjectionFlags[${index}]`); return {sourceRef: str(o.sourceRef, `security.promptInjectionFlags[${index}].sourceRef`, 300), severity: enumValue(o.severity, `security.promptInjectionFlags[${index}].severity`, ["high", "medium", "low"] as const), summary: str(o.summary, `security.promptInjectionFlags[${index}].summary`, 1200)}; }),
+            promptInjectionFlags: arr(security.promptInjectionFlags ?? [], "security.promptInjectionFlags", 100).map((item, index) => {
+                const o = obj(item, `security.promptInjectionFlags[${index}]`);
+                return {
+                    sourceRef: str(o.sourceRef, `security.promptInjectionFlags[${index}].sourceRef`, 300),
+                    severity: enumValue(o.severity, `security.promptInjectionFlags[${index}].severity`, ["high", "medium", "low"] as const),
+                    summary: str(o.summary, `security.promptInjectionFlags[${index}].summary`, 1200)
+                };
+            }),
         },
         quality: {
             verifierPass: bool(quality.verifierPass, "quality.verifierPass"),
@@ -1677,15 +1741,31 @@ export function renderHandoffMarkdown(report: AgentHandoffReport): string {
 }
 
 export function detectPromptInjection(text: string, sourceRef: string): AgentHandoffReport["security"]["promptInjectionFlags"] {
-    const patterns: Array<{re: RegExp; severity: "high" | "medium" | "low"; summary: string}> = [
-        {re: /ignore\s+(?:all\s+)?(?:previous|prior)\s+instructions/i, severity: "high", summary: "源内容包含试图覆盖上级指令的文本"},
-        {re: /(?:system|developer)\s+prompt\s*[:=]/i, severity: "medium", summary: "源内容包含 system/developer prompt 形态文本"},
-        {re: /(?:send|upload|exfiltrat\w*)[^\n]{0,80}(?:private key|ssh|cookie|token|password)/i, severity: "high", summary: "源内容包含疑似敏感数据外传指令"},
+    const patterns: Array<{ re: RegExp; severity: "high" | "medium" | "low"; summary: string }> = [
+        {
+            re: /ignore\s+(?:all\s+)?(?:previous|prior)\s+instructions/i,
+            severity: "high",
+            summary: "源内容包含试图覆盖上级指令的文本"
+        },
+        {
+            re: /(?:system|developer)\s+prompt\s*[:=]/i,
+            severity: "medium",
+            summary: "源内容包含 system/developer prompt 形态文本"
+        },
+        {
+            re: /(?:send|upload|exfiltrat\w*)[^\n]{0,80}(?:private key|ssh|cookie|token|password)/i,
+            severity: "high",
+            summary: "源内容包含疑似敏感数据外传指令"
+        },
     ];
-    return patterns.filter((item) => item.re.test(text)).map((item) => ({sourceRef, severity: item.severity, summary: item.summary}));
+    return patterns.filter((item) => item.re.test(text)).map((item) => ({
+        sourceRef,
+        severity: item.severity,
+        summary: item.summary
+    }));
 }
 
-export function extractionPrompt(options: {sourceId: string; coverageId: string; text: string}): string {
+export function extractionPrompt(options: { sourceId: string; coverageId: string; text: string }): string {
     return [
         "You are Agent State Extractor. Return exactly one JSON object, no Markdown fence.",
         `coverageId MUST equal ${JSON.stringify(options.coverageId)} and sourceId MUST equal ${JSON.stringify(options.sourceId)}.`,
@@ -1705,12 +1785,53 @@ export function extractionPrompt(options: {sourceId: string; coverageId: string;
             coverageId: options.coverageId,
             sourceId: options.sourceId,
             topicHints: ["short topic"],
-            claims: [{statement: "...", category: "state", status: "active", epistemicStatus: "observed", evidenceRefs: [options.coverageId], confidence: 0.9}],
-            constraints: [{statement: "...", level: "hard", status: "active", supersedes: null, evidenceRefs: [options.coverageId], confidence: 0.95}],
-            events: [{kind: "change", statement: "...", outcome: "...", evidenceRefs: [options.coverageId], confidence: 0.9}],
-            decisions: [{statement: "...", status: "active", rationaleSummary: "...", alternativesRejected: [], supersedes: null, evidenceRefs: [options.coverageId], confidence: 0.9}],
-            completedWork: [{statement: "...", status: "verified", artifactRefs: ["path"], verification: {status: "passed", summary: "...", commands: [], evidenceRefs: [options.coverageId]}, evidenceRefs: [options.coverageId]}],
-            openItems: [{type: "task", statement: "...", severity: "medium", status: "open", blocking: false, evidenceRefs: [options.coverageId]}],
+            claims: [{
+                statement: "...",
+                category: "state",
+                status: "active",
+                epistemicStatus: "observed",
+                evidenceRefs: [options.coverageId],
+                confidence: 0.9
+            }],
+            constraints: [{
+                statement: "...",
+                level: "hard",
+                status: "active",
+                supersedes: null,
+                evidenceRefs: [options.coverageId],
+                confidence: 0.95
+            }],
+            events: [{
+                kind: "change",
+                statement: "...",
+                outcome: "...",
+                evidenceRefs: [options.coverageId],
+                confidence: 0.9
+            }],
+            decisions: [{
+                statement: "...",
+                status: "active",
+                rationaleSummary: "...",
+                alternativesRejected: [],
+                supersedes: null,
+                evidenceRefs: [options.coverageId],
+                confidence: 0.9
+            }],
+            completedWork: [{
+                statement: "...",
+                status: "verified",
+                artifactRefs: ["path"],
+                verification: {status: "passed", summary: "...", commands: [], evidenceRefs: [options.coverageId]},
+                evidenceRefs: [options.coverageId]
+            }],
+            openItems: [{
+                type: "task",
+                statement: "...",
+                severity: "medium",
+                status: "open",
+                blocking: false,
+                evidenceRefs: [options.coverageId]
+            }],
             resources: [{type: "file", locator: "path", purpose: "...", sensitivity: "internal"}],
         }),
         "Enum values (use ONLY these exact strings):",
@@ -1736,7 +1857,11 @@ export function extractionPrompt(options: {sourceId: string; coverageId: string;
     ].join("\n\n");
 }
 
-export function consolidationPrompt(options: {fragments: HandoffFragment[]; previousReports: AgentHandoffReport[]; allowedEvidenceRefs: string[]}): string {
+export function consolidationPrompt(options: {
+    fragments: HandoffFragment[];
+    previousReports: AgentHandoffReport[];
+    allowedEvidenceRefs: string[]
+}): string {
     const previousCores = options.previousReports.map((report) => ({
         reportId: report.reportId,
         scope: report.scope,
@@ -1776,7 +1901,19 @@ export function consolidationPrompt(options: {fragments: HandoffFragment[]; prev
         }, null, 2),
         "Action shape (title is the action heading; keep it concise):",
         JSON.stringify({
-            actions: [{id: "ACT..", title: "...", priority: "P1", status: "ready", preconditions: ["..."], executionSummary: "...", expectedResult: "...", verification: "...", sideEffect: "read_only", approvalRequired: false, evidenceRefs: options.allowedEvidenceRefs.slice(0, 1)}],
+            actions: [{
+                id: "ACT..",
+                title: "...",
+                priority: "P1",
+                status: "ready",
+                preconditions: ["..."],
+                executionSummary: "...",
+                expectedResult: "...",
+                verification: "...",
+                sideEffect: "read_only",
+                approvalRequired: false,
+                evidenceRefs: options.allowedEvidenceRefs.slice(0, 1)
+            }],
         }),
         `Allowed evidence refs: ${JSON.stringify(options.allowedEvidenceRefs)}. Every claim/constraint/event/decision/work/open/action evidenceRefs must be a subset of this list.`,
         "Priority: correctness > current-state fidelity > user constraints > completion accuracy > open blockers > actionability > provenance > compression > prose elegance.",
@@ -1789,6 +1926,7 @@ export function consolidationPrompt(options: {fragments: HandoffFragment[]; prev
         "Do not turn proposed next steps into completed work. Do not turn stale counts/configuration into current state. Do not invent paths, commands, commits, test results, or side effects.",
         "Before finalizing executiveState/openItems/actions, perform a resolved-state sweep: (1) any open item contradicted by a later successful verification must be removed or marked historical in timeline; (2) any verified completedWork must not simultaneously appear as 'not yet verified'; (3) any superseded path/decision must not remain an unresolved choice; (4) for repeated quantitative measurements of the same metric, use the newest supported measurement as current and retain older measurements only in timeline.",
         "Regression examples that MUST be handled correctly: API /emails 401 then later 200 => not blocked on mail auth; live probe later passes end-to-end => do not say live probe is unverified; user corrects root cpa_proxy_state.json to Grok/cpa_proxy_state.json => Grok path active/root path superseded, not an unresolved ambiguity; node health 67/215 then 91/215 then 191/215 => current state is 191/215 unless later evidence changes it.",
+        "scope.topic is also the session title: make it a concise 4-12 word title (or 8-24 CJK characters when practical) covering the handoff's primary domains and outcome. scope.project is a project/repository name or null, never a filesystem path.",
         "runtimeEnvironment is coding-agent state: cwd/repository/branch/commit/worktreeState/tools/configKeys/backgroundJobs/externalSideEffects/evidenceRefs. Use null/[] when unknown. Config keys may be named but secret VALUES must never appear.",
         "Actions are recommendations, not mandatory plans. Keep only actions that are actually useful for resuming; mark blocked/optional where uncertainty remains. Do not overconstrain the next agent.",
         "A work item may be status=verified only if evidence demonstrates verification; assistant assertions alone are status=reported at best.",
@@ -1804,7 +1942,12 @@ export function consolidationPrompt(options: {fragments: HandoffFragment[]; prev
     ].join("\n\n");
 }
 
-export function reviewPrompt(options: {core: HandoffCore; fragments: HandoffFragment[]; previousReports: AgentHandoffReport[]; allowedEvidenceRefs: string[]}): string {
+export function reviewPrompt(options: {
+    core: HandoffCore;
+    fragments: HandoffFragment[];
+    previousReports: AgentHandoffReport[];
+    allowedEvidenceRefs: string[]
+}): string {
     return [
         "You are an adversarial Agent Handoff Verifier. Return exactly one JSON object, no Markdown fence.",
         "Do NOT rewrite the report. Judge whether a later AI agent could safely continue from it.",
@@ -1819,7 +1962,14 @@ export function reviewPrompt(options: {core: HandoffCore; fragments: HandoffFrag
         JSON.stringify(options.core),
         "CANDIDATE_CORE_END",
         "PREVIOUS_HANDOFFS_START",
-        JSON.stringify(options.previousReports.map((report) => ({reportId: report.reportId, constraints: report.constraints, decisions: report.decisions, completedWork: report.completedWork, openItems: report.openItems, claims: report.claims}))),
+        JSON.stringify(options.previousReports.map((report) => ({
+            reportId: report.reportId,
+            constraints: report.constraints,
+            decisions: report.decisions,
+            completedWork: report.completedWork,
+            openItems: report.openItems,
+            claims: report.claims
+        }))),
         "PREVIOUS_HANDOFFS_END",
         "FRAGMENTS_START",
         JSON.stringify(options.fragments),
@@ -1827,9 +1977,19 @@ export function reviewPrompt(options: {core: HandoffCore; fragments: HandoffFrag
     ].join("\n\n");
 }
 
-export function repairPrompt(options: {core: HandoffCore; review: HandoffReview; fragments: HandoffFragment[]; previousReports: AgentHandoffReport[]; allowedEvidenceRefs: string[]}): string {
+export function repairPrompt(options: {
+    core: HandoffCore;
+    review: HandoffReview;
+    fragments: HandoffFragment[];
+    previousReports: AgentHandoffReport[];
+    allowedEvidenceRefs: string[]
+}): string {
     return [
-        consolidationPrompt({fragments: options.fragments, previousReports: options.previousReports, allowedEvidenceRefs: options.allowedEvidenceRefs}),
+        consolidationPrompt({
+            fragments: options.fragments,
+            previousReports: options.previousReports,
+            allowedEvidenceRefs: options.allowedEvidenceRefs
+        }),
         "The previous candidate failed independent verification. Repair ONLY the identified issues while preserving supported information.",
         "PREVIOUS_CANDIDATE_START",
         JSON.stringify(options.core),
@@ -1841,6 +2001,5 @@ export function repairPrompt(options: {core: HandoffCore; review: HandoffReview;
 }
 
 export function reportTitle(report: AgentHandoffReport): string {
-    const topic = report.scope.project || report.scope.topic;
-    return topic.slice(0, 180);
+    return report.scope.topic.slice(0, 180);
 }

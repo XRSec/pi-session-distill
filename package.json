@@ -1,28 +1,42 @@
 {
   "name": "pi-session-distill",
-  "version": "4.3.0",
+  "version": "4.5.0",
   "private": false,
   "type": "module",
   "description": "Agent State Handoff cleanup, merge, verification, and repeatable re-cleaning for Pi sessions",
-  "keywords": ["pi-package", "pi-extension", "pi", "session", "compaction", "handoff", "distill", "merge"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "session",
+    "compaction",
+    "handoff",
+    "distill",
+    "merge"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/XRSec/pi-session-distill.git"
   },
   "scripts": {
-    "analyze": "node --experimental-strip-types scripts/analyze-session.ts"
+    "analyze": "node --experimental-strip-types scripts/analyze-session.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },
   "files": [
     "index.ts",
+    "checkpoint.ts",
     "core.ts",
     "handoff.ts",
+    "history.ts",
     "native-compaction.ts",
     "session-writer.ts",
     "textual.ts",
@@ -30,6 +44,7 @@
     "schemas",
     "types",
     "scripts",
+    "tests",
     "README.md",
     "REQUIREMENTS.md",
     "CHANGELOG.md"

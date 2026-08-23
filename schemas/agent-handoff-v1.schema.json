@@ -26,73 +26,248 @@
     "quality"
   ],
   "properties": {
-    "schemaVersion": {"const": "1.0.0"},
-    "reportId": {"type": "string", "pattern": "^HND-[a-f0-9]{16}$"},
-    "reportKind": {"enum": ["clean_handoff", "merge", "reclean"]},
-    "createdAt": {"type": "string"},
+    "schemaVersion": {
+      "const": "1.0.0"
+    },
+    "reportId": {
+      "type": "string",
+      "pattern": "^HND-[a-f0-9]{16}$"
+    },
+    "reportKind": {
+      "enum": [
+        "clean_handoff",
+        "merge",
+        "reclean"
+      ]
+    },
+    "createdAt": {
+      "type": "string"
+    },
     "scope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["project", "topic", "objective", "status"],
+      "required": [
+        "project",
+        "topic",
+        "objective",
+        "status"
+      ],
       "properties": {
-        "project": {"type": ["string", "null"]},
-        "topic": {"type": "string", "minLength": 1},
-        "objective": {"type": "string", "minLength": 1},
-        "status": {"enum": ["active", "blocked", "completed", "partially_completed", "unknown"]}
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "active",
+            "blocked",
+            "completed",
+            "partially_completed",
+            "unknown"
+          ]
+        }
       }
     },
     "executiveState": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["summary", "currentState", "confidence"],
+      "required": [
+        "summary",
+        "currentState",
+        "confidence"
+      ],
       "properties": {
-        "summary": {"type": "string"},
-        "currentState": {"type": "string"},
-        "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        "summary": {
+          "type": "string"
+        },
+        "currentState": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
       }
     },
     "runtimeEnvironment": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cwd", "repository", "branch", "commit", "worktreeState", "tools", "configKeys", "backgroundJobs", "externalSideEffects", "evidenceRefs"],
+      "required": [
+        "cwd",
+        "repository",
+        "branch",
+        "commit",
+        "worktreeState",
+        "tools",
+        "configKeys",
+        "backgroundJobs",
+        "externalSideEffects",
+        "evidenceRefs"
+      ],
       "properties": {
-        "cwd": {"type": ["string", "null"]},
-        "repository": {"type": ["string", "null"]},
-        "branch": {"type": ["string", "null"]},
-        "commit": {"type": ["string", "null"]},
-        "worktreeState": {"type": ["string", "null"]},
-        "tools": {"type": "array", "items": {"type": "string"}},
-        "configKeys": {"type": "array", "items": {"type": "string"}},
-        "backgroundJobs": {"type": "array", "items": {"type": "string"}},
-        "externalSideEffects": {"type": "array", "items": {"type": "string"}},
-        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repository": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worktreeState": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "configKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "backgroundJobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "externalSideEffects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/evidenceRefs"
+        }
       }
     },
-    "constraints": {"type": "array", "items": {"$ref": "#/$defs/constraint"}},
-    "timeline": {"type": "array", "items": {"$ref": "#/$defs/phase"}},
-    "decisions": {"type": "array", "items": {"$ref": "#/$defs/decision"}},
-    "completedWork": {"type": "array", "items": {"$ref": "#/$defs/work"}},
-    "openItems": {"type": "array", "items": {"$ref": "#/$defs/openItem"}},
-    "resources": {"type": "array", "items": {"$ref": "#/$defs/resource"}},
-    "actions": {"type": "array", "items": {"$ref": "#/$defs/action"}},
-    "claims": {"type": "array", "items": {"$ref": "#/$defs/claim"}},
-    "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
+    "constraints": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/constraint"
+      }
+    },
+    "timeline": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/phase"
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/decision"
+      }
+    },
+    "completedWork": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/work"
+      }
+    },
+    "openItems": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/openItem"
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/action"
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/claim"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
     "provenance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["parentReportIds", "inputSnapshots", "transforms", "mergePolicy", "generatedBy"],
+      "required": [
+        "parentReportIds",
+        "inputSnapshots",
+        "transforms",
+        "mergePolicy",
+        "generatedBy"
+      ],
       "properties": {
-        "parentReportIds": {"type": "array", "items": {"type": "string"}},
+        "parentReportIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "inputSnapshots": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["sourceId", "sha256", "bytes"],
+            "required": [
+              "sourceId",
+              "sha256",
+              "bytes"
+            ],
             "properties": {
-              "sourceId": {"type": "string"},
-              "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-              "bytes": {"type": "integer", "minimum": 0}
+              "sourceId": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
             }
           }
         },
@@ -101,23 +276,42 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "version"],
+            "required": [
+              "name",
+              "version"
+            ],
             "properties": {
-              "name": {"type": "string"},
-              "version": {"type": "string"},
-              "model": {"type": "string"},
-              "promptVersion": {"type": "string"}
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "promptVersion": {
+                "type": "string"
+              }
             }
           }
         },
-        "mergePolicy": {"type": "string"},
+        "mergePolicy": {
+          "type": "string"
+        },
         "generatedBy": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["agent"],
+          "required": [
+            "agent"
+          ],
           "properties": {
-            "agent": {"type": "string"},
-            "model": {"type": "string"}
+            "agent": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            }
           }
         }
       }
@@ -125,20 +319,43 @@
     "security": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["classification", "redactionsApplied", "promptInjectionFlags"],
+      "required": [
+        "classification",
+        "redactionsApplied",
+        "promptInjectionFlags"
+      ],
       "properties": {
-        "classification": {"const": "internal"},
-        "redactionsApplied": {"type": "number", "minimum": 0},
+        "classification": {
+          "const": "internal"
+        },
+        "redactionsApplied": {
+          "type": "number",
+          "minimum": 0
+        },
         "promptInjectionFlags": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["sourceRef", "severity", "summary"],
+            "required": [
+              "sourceRef",
+              "severity",
+              "summary"
+            ],
             "properties": {
-              "sourceRef": {"type": "string"},
-              "severity": {"enum": ["high", "medium", "low"]},
-              "summary": {"type": "string"}
+              "sourceRef": {
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              "summary": {
+                "type": "string"
+              }
             }
           }
         }
@@ -147,166 +364,555 @@
     "quality": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["verifierPass", "scores", "warnings", "normalizedContentHash"],
+      "required": [
+        "verifierPass",
+        "scores",
+        "warnings",
+        "normalizedContentHash"
+      ],
       "properties": {
-        "verifierPass": {"type": "boolean"},
-        "scores": {"type": "object", "additionalProperties": {"type": "number"}},
-        "warnings": {"type": "array", "items": {"type": "string"}},
-        "normalizedContentHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        "verifierPass": {
+          "type": "boolean"
+        },
+        "scores": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "normalizedContentHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
       }
     }
   },
   "$defs": {
-    "evidenceRefs": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
-    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "evidenceRefs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
     "constraint": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "statement", "level", "status", "evidenceRefs", "confidence"],
+      "required": [
+        "id",
+        "statement",
+        "level",
+        "status",
+        "evidenceRefs",
+        "confidence"
+      ],
       "properties": {
-        "id": {"type": "string"},
-        "statement": {"type": "string"},
-        "level": {"enum": ["hard", "soft"]},
-        "status": {"enum": ["active", "superseded", "revoked", "uncertain"]},
-        "supersedes": {"type": ["string", "null"]},
-        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"},
-        "confidence": {"$ref": "#/$defs/confidence"}
+        "id": {
+          "type": "string"
+        },
+        "statement": {
+          "type": "string"
+        },
+        "level": {
+          "enum": [
+            "hard",
+            "soft"
+          ]
+        },
+        "status": {
+          "enum": [
+            "active",
+            "superseded",
+            "revoked",
+            "uncertain"
+          ]
+        },
+        "supersedes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/evidenceRefs"
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        }
       }
     },
     "event": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "statement", "evidenceRefs", "confidence"],
+      "required": [
+        "id",
+        "kind",
+        "statement",
+        "evidenceRefs",
+        "confidence"
+      ],
       "properties": {
-        "id": {"type": "string"},
-        "kind": {"enum": ["request", "discovery", "decision", "change", "verification", "failure", "reversal", "milestone"]},
-        "statement": {"type": "string"},
-        "outcome": {"type": ["string", "null"]},
-        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"},
-        "confidence": {"$ref": "#/$defs/confidence"}
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "request",
+            "discovery",
+            "decision",
+            "change",
+            "verification",
+            "failure",
+            "reversal",
+            "milestone"
+          ]
+        },
+        "statement": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/evidenceRefs"
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        }
       }
     },
     "phase": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["phaseId", "title", "summary", "events"],
+      "required": [
+        "phaseId",
+        "title",
+        "summary",
+        "events"
+      ],
       "properties": {
-        "phaseId": {"type": "string"},
-        "title": {"type": "string"},
-        "summary": {"type": "string"},
-        "events": {"type": "array", "items": {"$ref": "#/$defs/event"}}
+        "phaseId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/event"
+          }
+        }
       }
     },
     "decision": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "statement", "status", "rationaleSummary", "alternativesRejected", "evidenceRefs", "confidence"],
+      "required": [
+        "id",
+        "statement",
+        "status",
+        "rationaleSummary",
+        "alternativesRejected",
+        "evidenceRefs",
+        "confidence"
+      ],
       "properties": {
-        "id": {"type": "string"},
-        "statement": {"type": "string"},
-        "status": {"enum": ["active", "proposed", "superseded", "reverted", "uncertain"]},
-        "rationaleSummary": {"type": "string"},
-        "alternativesRejected": {"type": "array", "items": {"type": "string"}},
-        "supersedes": {"type": ["string", "null"]},
-        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"},
-        "confidence": {"$ref": "#/$defs/confidence"}
+        "id": {
+          "type": "string"
+        },
+        "statement": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "proposed",
+            "superseded",
+            "reverted",
+            "uncertain"
+          ]
+        },
+        "rationaleSummary": {
+          "type": "string"
+        },
+        "alternativesRejected": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "supersedes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/evidenceRefs"
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        }
       }
     },
     "verification": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "summary", "commands", "evidenceRefs"],
+      "required": [
+        "status",
+        "summary",
+        "commands",
+        "evidenceRefs"
+      ],
       "properties": {
-        "status": {"enum": ["passed", "failed", "not_run", "unknown"]},
-        "summary": {"type": "string"},
-        "commands": {"type": "array", "items": {"type": "string"}},
-        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "not_run",
+            "unknown"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/evidenceRefs"
+        }
       }
     },
     "work": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "statement", "status", "artifactRefs", "verification", "evidenceRefs"],
+      "required": [
+        "id",
+        "statement",
+        "status",
+        "artifactRefs",
+        "verification",
+        "evidenceRefs"
+      ],
       "properties": {
-        "id": {"type": "string"},
-        "statement": {"type": "string"},
-        "status": {"enum": ["verified", "reported", "partial", "failed"]},
-        "artifactRefs": {"type": "array", "items": {"type": "string"}},
-        "verification": {"$ref": "#/$defs/verification"},
-        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+        "id": {
+          "type": "string"
+        },
+        "statement": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "verified",
+            "reported",
+            "partial",
+            "failed"
+          ]
+        },
+        "artifactRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verification": {
+          "$ref": "#/$defs/verification"
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/evidenceRefs"
+        }
       }
     },
     "openItem": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "type", "statement", "severity", "status", "blocking", "evidenceRefs"],
+      "required": [
+        "id",
+        "type",
+        "statement",
+        "severity",
+        "status",
+        "blocking",
+        "evidenceRefs"
+      ],
       "properties": {
-        "id": {"type": "string"},
-        "type": {"enum": ["task", "bug", "risk", "question", "conflict", "verification_gap"]},
-        "statement": {"type": "string"},
-        "severity": {"enum": ["critical", "high", "medium", "low"]},
-        "status": {"enum": ["open", "blocked", "deferred", "uncertain"]},
-        "blocking": {"type": "boolean"},
-        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "task",
+            "bug",
+            "risk",
+            "question",
+            "conflict",
+            "verification_gap"
+          ]
+        },
+        "statement": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "status": {
+          "enum": [
+            "open",
+            "blocked",
+            "deferred",
+            "uncertain"
+          ]
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/evidenceRefs"
+        }
       }
     },
     "resource": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "type", "locator", "purpose", "sensitivity"],
+      "required": [
+        "id",
+        "type",
+        "locator",
+        "purpose",
+        "sensitivity"
+      ],
       "properties": {
-        "id": {"type": "string"},
-        "type": {"enum": ["file", "directory", "repository", "commit", "diff", "log", "attachment", "url", "api", "database", "symbol", "other"]},
-        "locator": {"type": "string"},
-        "purpose": {"type": "string"},
-        "sensitivity": {"enum": ["public", "internal", "confidential", "secret", "unknown"]}
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "file",
+            "directory",
+            "repository",
+            "commit",
+            "diff",
+            "log",
+            "attachment",
+            "url",
+            "api",
+            "database",
+            "symbol",
+            "other"
+          ]
+        },
+        "locator": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "sensitivity": {
+          "enum": [
+            "public",
+            "internal",
+            "confidential",
+            "secret",
+            "unknown"
+          ]
+        }
       }
     },
     "action": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "priority", "status", "evidenceRefs"],
+      "required": [
+        "id",
+        "priority",
+        "status",
+        "evidenceRefs"
+      ],
       "properties": {
-        "id": {"type": "string"},
-        "title": {"type": "string"},
-        "statement": {"type": "string"},
-        "priority": {"enum": ["P0", "P1", "P2", "P3"]},
-        "status": {"enum": ["ready", "blocked", "optional", "done"]},
-        "preconditions": {"type": "array", "items": {"type": "string"}},
-        "executionSummary": {"type": "string"},
-        "expectedResult": {"type": "string"},
-        "verification": {"type": "string"},
-        "sideEffect": {"enum": ["read_only", "reversible", "destructive", "external_side_effect", "unknown"]},
-        "approvalRequired": {"type": "boolean"},
-        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "statement": {
+          "type": "string"
+        },
+        "priority": {
+          "enum": [
+            "P0",
+            "P1",
+            "P2",
+            "P3"
+          ]
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "blocked",
+            "optional",
+            "done"
+          ]
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "executionSummary": {
+          "type": "string"
+        },
+        "expectedResult": {
+          "type": "string"
+        },
+        "verification": {
+          "type": "string"
+        },
+        "sideEffect": {
+          "enum": [
+            "read_only",
+            "reversible",
+            "destructive",
+            "external_side_effect",
+            "unknown"
+          ]
+        },
+        "approvalRequired": {
+          "type": "boolean"
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/evidenceRefs"
+        }
       }
     },
     "claim": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "statement", "category", "status", "epistemicStatus", "evidenceRefs", "confidence"],
+      "required": [
+        "id",
+        "statement",
+        "category",
+        "status",
+        "epistemicStatus",
+        "evidenceRefs",
+        "confidence"
+      ],
       "properties": {
-        "id": {"type": "string"},
-        "statement": {"type": "string"},
-        "category": {"enum": ["requirement", "state", "decision", "result", "risk", "observation"]},
-        "status": {"enum": ["active", "superseded", "uncertain"]},
-        "epistemicStatus": {"enum": ["confirmed", "observed", "inferred", "uncertain", "stale"]},
-        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"},
-        "confidence": {"$ref": "#/$defs/confidence"}
+        "id": {
+          "type": "string"
+        },
+        "statement": {
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "requirement",
+            "state",
+            "decision",
+            "result",
+            "risk",
+            "observation"
+          ]
+        },
+        "status": {
+          "enum": [
+            "active",
+            "superseded",
+            "uncertain"
+          ]
+        },
+        "epistemicStatus": {
+          "enum": [
+            "confirmed",
+            "observed",
+            "inferred",
+            "uncertain",
+            "stale"
+          ]
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/evidenceRefs"
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        }
       }
     },
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "sourceId", "sourceType", "locator", "contentHash", "trust", "redacted"],
+      "required": [
+        "id",
+        "sourceId",
+        "sourceType",
+        "locator",
+        "contentHash",
+        "trust",
+        "redacted"
+      ],
       "properties": {
-        "id": {"type": "string"},
-        "sourceId": {"type": "string"},
-        "sourceType": {"enum": ["session_chunk", "previous_handoff", "file", "diff", "log", "attachment", "external_source"]},
-        "locator": {"type": "string"},
-        "contentHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-        "trust": {"enum": ["high", "medium", "low", "untrusted"]},
-        "redacted": {"type": "boolean"}
+        "id": {
+          "type": "string"
+        },
+        "sourceId": {
+          "type": "string"
+        },
+        "sourceType": {
+          "enum": [
+            "session_chunk",
+            "previous_handoff",
+            "file",
+            "diff",
+            "log",
+            "attachment",
+            "external_source"
+          ]
+        },
+        "locator": {
+          "type": "string"
+        },
+        "contentHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "trust": {
+          "enum": [
+            "high",
+            "medium",
+            "low",
+            "untrusted"
+          ]
+        },
+        "redacted": {
+          "type": "boolean"
+        }
       }
     }
   }

@@ -47,14 +47,16 @@ function safeSourceText(value: unknown): string {
 
 function messageRole(message: unknown): string | undefined {
     if (!message || typeof message !== "object") return undefined;
-    const role = (message as {role?: unknown}).role;
+    const role = (message as { role?: unknown }).role;
     return typeof role === "string" ? role : undefined;
 }
 
 function hasToolCall(message: unknown): boolean {
     if (!message || typeof message !== "object") return false;
-    const content = (message as {content?: unknown}).content;
-    return Array.isArray(content) && content.some((part) => part && typeof part === "object" && ((part as {type?: unknown}).type === "toolCall" || (part as {type?: unknown}).type === "tool_call"));
+    const content = (message as { content?: unknown }).content;
+    return Array.isArray(content) && content.some((part) => part && typeof part === "object" && ((part as {
+        type?: unknown
+    }).type === "toolCall" || (part as { type?: unknown }).type === "tool_call"));
 }
 
 /**
@@ -67,11 +69,17 @@ function latestAuthoritativeTail(messages: unknown[]): unknown[] {
     if (!Array.isArray(messages) || messages.length === 0) return [];
     let start = -1;
     for (let index = messages.length - 1; index >= 0; index--) {
-        if (messageRole(messages[index]) === "user") { start = index; break; }
+        if (messageRole(messages[index]) === "user") {
+            start = index;
+            break;
+        }
     }
     if (start === -1) {
         for (let index = messages.length - 1; index >= 0; index--) {
-            if (messageRole(messages[index]) === "user" || (messageRole(messages[index]) === "assistant" && hasToolCall(messages[index]))) { start = index; break; }
+            if (messageRole(messages[index]) === "user" || (messageRole(messages[index]) === "assistant" && hasToolCall(messages[index]))) {
+                start = index;
+                break;
+            }
         }
         if (start === -1) start = 0;
     }
@@ -110,7 +118,7 @@ function responseText(response: any): string {
         .trim();
 }
 
-function fileDetails(fileOps: any): {readFiles: string[]; modifiedFiles: string[]} {
+function fileDetails(fileOps: any): { readFiles: string[]; modifiedFiles: string[] } {
     const read = new Set<string>(fileOps?.read instanceof Set ? fileOps.read : []);
     const modified = new Set<string>();
     for (const value of [fileOps?.written, fileOps?.edited]) {

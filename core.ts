@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 export function validateSessionHeaderLine(line: string, expectedId: string): number {
-    let header: {type?: string; version?: number; id?: string};
+    let header: { type?: string; version?: number; id?: string };
     try {
-        header = JSON.parse(line) as {type?: string; version?: number; id?: string};
+        header = JSON.parse(line) as { type?: string; version?: number; id?: string };
     } catch {
         throw new Error("无效会话头 JSON");
     }
@@ -39,7 +39,17 @@ export interface Capsule {
     coveredSourceIds: string[];
 }
 
-export type FactCategory = "state" | "capability" | "entry_point" | "decision" | "invariant" | "failure" | "fix" | "verification" | "constraint" | "open_work";
+export type FactCategory =
+    "state"
+    | "capability"
+    | "entry_point"
+    | "decision"
+    | "invariant"
+    | "failure"
+    | "fix"
+    | "verification"
+    | "constraint"
+    | "open_work";
 export type FactStatus = "current" | "historical" | "superseded" | "unresolved";
 export type FactConfidence = "verified" | "inferred";
 
@@ -105,11 +115,13 @@ const FACT_CONFIDENCES = new Set<FactConfidence>(["verified", "inferred"]);
 /** Exclude assistant thinking blocks before serialization. */
 export function stripAssistantThinking(message: unknown): unknown {
     if (!message || typeof message !== "object" || Array.isArray(message)) return message;
-    const value = message as {role?: unknown; content?: unknown};
+    const value = message as { role?: unknown; content?: unknown };
     if (value.role !== "assistant" || !Array.isArray(value.content)) return message;
     return {
         ...value,
-        content: value.content.filter((block) => !block || typeof block !== "object" || (block as {type?: unknown}).type !== "thinking"),
+        content: value.content.filter((block) => !block || typeof block !== "object" || (block as {
+            type?: unknown
+        }).type !== "thinking"),
     };
 }
 
@@ -177,29 +189,31 @@ export function preserveRetainedTail(messages: unknown[], branchEntries: unknown
 }
 
 function messageRole(message: unknown): string | undefined {
-    return message && typeof message === "object" ? (message as {role?: string}).role : undefined;
+    return message && typeof message === "object" ? (message as { role?: string }).role : undefined;
 }
 
 function messageContentText(message: unknown): string {
     if (!message || typeof message !== "object" || Array.isArray(message)) return "";
-    const content = (message as {content?: unknown}).content;
+    const content = (message as { content?: unknown }).content;
     if (typeof content === "string") return content.trim();
     if (!Array.isArray(content)) return "";
     return content.map((part) => {
         if (!part || typeof part !== "object") return "";
-        const value = part as {type?: unknown; text?: unknown};
+        const value = part as { type?: unknown; text?: unknown };
         return value.type === "text" && typeof value.text === "string" ? value.text : "";
     }).filter(Boolean).join("\n").trim();
 }
 
 function messageToolName(message: unknown): string {
     if (!message || typeof message !== "object" || Array.isArray(message)) return "";
-    const value = message as {toolName?: unknown};
+    const value = message as { toolName?: unknown };
     return typeof value.toolName === "string" ? value.toolName : "";
 }
 
 function toolResultIsError(message: unknown): boolean {
-    return Boolean(message && typeof message === "object" && !Array.isArray(message) && (message as {isError?: unknown}).isError === true);
+    return Boolean(message && typeof message === "object" && !Array.isArray(message) && (message as {
+        isError?: unknown
+    }).isError === true);
 }
 
 function normalizedCompactText(text: string): string {
@@ -311,7 +325,9 @@ function selectToolFallbacks(activity: unknown[], maxResults = 6): unknown[] {
     if (candidates.length === 0) return [];
 
     const chosen = new Map<number, typeof candidates[number]>();
-    const add = (item: typeof candidates[number] | undefined) => { if (item) chosen.set(item.index, item); };
+    const add = (item: typeof candidates[number] | undefined) => {
+        if (item) chosen.set(item.index, item);
+    };
 
     // Always keep the newest error-like result; it may be the reason a turn is unfinished.
     add([...candidates].reverse().find((item) => toolResultIsError(item.message) || item.score >= 100));
@@ -551,10 +567,10 @@ export function selectResultFirstRecords(messages: unknown[]): ResultFirstSelect
 
 function hasToolCall(message: unknown): boolean {
     if (!message || typeof message !== "object") return false;
-    const content = (message as {content?: unknown}).content;
+    const content = (message as { content?: unknown }).content;
     return Array.isArray(content) && content.some((part) => {
         if (!part || typeof part !== "object") return false;
-        const type = (part as {type?: string}).type;
+        const type = (part as { type?: string }).type;
         return type === "toolCall" || type === "tool_call";
     });
 }
@@ -753,7 +769,11 @@ export function singleFactLedgerDomain(ledger: FactLedger): string {
 }
 
 export function remapFactLedgerSources(ledger: FactLedger, sourceId: string): FactLedger {
-    return {...ledger, coveredSourceIds: [sourceId], facts: ledger.facts.map((fact) => ({...fact, sourceIds: [sourceId]}))};
+    return {
+        ...ledger,
+        coveredSourceIds: [sourceId],
+        facts: ledger.facts.map((fact) => ({...fact, sourceIds: [sourceId]}))
+    };
 }
 
 export function assertFactLedgerDomainsPreserved(inputs: FactLedger[], output: FactLedger): void {
@@ -784,7 +804,12 @@ export function validateCapsuleResponse(raw: string, stopReason: string, expecte
     if (new Set(paragraphs).size !== paragraphs.length) throw new Error("正文包含重复段落");
     const fenceCount = object.markdown.match(/```/g)?.length ?? 0;
     if (fenceCount % 2 !== 0) throw new Error("Markdown fence 未闭合");
-    return {title: object.title.trim(), domain: object.domain.trim(), markdown: object.markdown.trim(), coveredSourceIds: covered};
+    return {
+        title: object.title.trim(),
+        domain: object.domain.trim(),
+        markdown: object.markdown.trim(),
+        coveredSourceIds: covered
+    };
 }
 
 export function validateCapsuleResponseLenient(raw: string, stopReason: string, expectedSourceIds: string[]): Capsule {
@@ -829,7 +854,11 @@ export function validateCapsuleReviewResponse(
         const section = entry.section.trim().startsWith("## ") ? entry.section.trim() : `## ${entry.section.trim()}`;
         if (!REQUIRED_HEADINGS.includes(section as typeof REQUIRED_HEADINGS[number])) throw new Error(`review evidence section 无效: ${String(entry.section)}`);
         if (!Array.isArray(entry.factIds) || entry.factIds.length === 0 || entry.factIds.some((id) => typeof id !== "string" || (validFactIds && !validFactIds.has(id)))) throw new Error(`review evidence factIds 无效: ${String(entry.criterion)}`);
-        return {criterion: entry.criterion as keyof CapsuleReview["scores"], section, factIds: [...new Set(entry.factIds as string[])]};
+        return {
+            criterion: entry.criterion as keyof CapsuleReview["scores"],
+            section,
+            factIds: [...new Set(entry.factIds as string[])]
+        };
     });
     const citedFactIds = new Set(evidence.flatMap((entry) => entry.factIds));
     if (requiredFactIds) {
@@ -843,7 +872,13 @@ export function validateCapsuleReviewResponse(
     if (object.pass !== scoresPass) throw new Error("review pass 与 scores 不一致");
     if (!object.pass && (issues.length === 0 || !object.rewriteInstructions.trim())) throw new Error("未通过 review 必须给出问题和重写指令");
     if (object.pass && (issues.length > 0 || object.rewriteInstructions.trim())) throw new Error("已通过 review 不应包含问题或重写指令");
-    const review: CapsuleReview = {pass: object.pass, scores, evidence, issues, rewriteInstructions: object.rewriteInstructions};
+    const review: CapsuleReview = {
+        pass: object.pass,
+        scores,
+        evidence,
+        issues,
+        rewriteInstructions: object.rewriteInstructions
+    };
     return review;
 }
 
@@ -868,7 +903,10 @@ export function collectImportSources(direct: SourceRef[], branches: unknown[][])
             const value = entry as Record<string, unknown>;
             if (value.type !== "custom" || value.customType !== "import_source" || !value.data || typeof value.data !== "object") continue;
             const data = value.data as Record<string, unknown>;
-            if (typeof data.source === "string" && typeof data.sourceId === "string") add({source: data.source, sourceId: data.sourceId});
+            if (typeof data.source === "string" && typeof data.sourceId === "string") add({
+                source: data.source,
+                sourceId: data.sourceId
+            });
         }
     }
     return result;
@@ -884,7 +922,11 @@ export function sessionJsonl(lines: Array<Record<string, unknown>>): string {
 
 function fsyncDirectory(directory: string): void {
     const dirFd = fs.openSync(directory, "r");
-    try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+    try {
+        fs.fsyncSync(dirFd);
+    } finally {
+        fs.closeSync(dirFd);
+    }
 }
 
 export function atomicWrite0600(destination: string, content: string | Buffer): void {
@@ -908,13 +950,36 @@ export function atomicWrite0600(destination: string, content: string | Buffer): 
     }
 }
 
+export function atomicReplace0600(destination: string, content: string | Buffer): void {
+    fs.mkdirSync(path.dirname(destination), {recursive: true});
+    const temporary = path.join(path.dirname(destination), `.${path.basename(destination)}.${crypto.randomUUID()}.tmp`);
+    let fd: number | undefined;
+    try {
+        fd = fs.openSync(temporary, "wx", 0o600);
+        fs.writeFileSync(fd, content);
+        fs.fsyncSync(fd);
+        fs.closeSync(fd);
+        fd = undefined;
+        fs.renameSync(temporary, destination);
+        fsyncDirectory(path.dirname(destination));
+    } catch (error) {
+        if (fd !== undefined) fs.closeSync(fd);
+        if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+        throw error;
+    }
+}
+
 function atomicCopy0600(source: string, destination: string): void {
     const temporary = path.join(path.dirname(destination), `.${path.basename(destination)}.${crypto.randomUUID()}.tmp`);
     try {
         fs.copyFileSync(source, temporary, fs.constants.COPYFILE_EXCL);
         fs.chmodSync(temporary, 0o600);
         const fd = fs.openSync(temporary, "r");
-        try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        try {
+            fs.fsyncSync(fd);
+        } finally {
+            fs.closeSync(fd);
+        }
         fs.linkSync(temporary, destination);
         fs.unlinkSync(temporary);
         fsyncDirectory(path.dirname(destination));
@@ -940,13 +1005,16 @@ export function sha256File(filePath: string): string {
     return hash.digest("hex");
 }
 
-export function createSnapshot(sourcePaths: string[], backupRoot: string, runId: string): {directory: string; files: Array<{file: string; bytes: number; sha256: string}>} {
+export function createSnapshot(sourcePaths: string[], backupRoot: string, runId: string): {
+    directory: string;
+    files: Array<{ file: string; bytes: number; sha256: string }>
+} {
     if (!fs.existsSync(backupRoot)) fs.mkdirSync(backupRoot, {recursive: true, mode: 0o700});
     const directory = path.join(backupRoot, runId);
     fs.mkdirSync(directory, {recursive: false, mode: 0o700});
     fs.chmodSync(directory, 0o700);
     fsyncDirectory(backupRoot);
-    const records: Array<{file: string; bytes: number; sha256: string}> = [];
+    const records: Array<{ file: string; bytes: number; sha256: string }> = [];
     for (const [index, sourcePath] of sourcePaths.entries()) {
         const link = fs.lstatSync(sourcePath);
         if (link.isSymbolicLink() || !link.isFile()) throw new Error(`源会话必须是普通文件且不能是符号链接: ${path.basename(sourcePath)}`);
@@ -971,9 +1039,11 @@ export function createSnapshot(sourcePaths: string[], backupRoot: string, runId:
     const manifest = {schemaVersion: 1, runId, createdAt: new Date().toISOString(), files: records};
     const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
     atomicWrite0600(path.join(directory, "manifest.json"), manifestText);
-    let readBack: {files?: typeof records};
+    let readBack: { files?: typeof records };
     try {
-        readBack = JSON.parse(fs.readFileSync(path.join(directory, "manifest.json"), "utf8")) as {files?: typeof records};
+        readBack = JSON.parse(fs.readFileSync(path.join(directory, "manifest.json"), "utf8")) as {
+            files?: typeof records
+        };
     } catch {
         throw new Error("快照 manifest read-back JSON 无效");
     }
@@ -984,9 +1054,9 @@ export function createSnapshot(sourcePaths: string[], backupRoot: string, runId:
 export async function switchPreservingSources(
     capsulePath: string,
     sources: PreservedSource[],
-    switcher: (filePath: string) => Promise<{cancelled: boolean}>,
+    switcher: (filePath: string) => Promise<{ cancelled: boolean }>,
     onSourceChanged?: (message: string, source: PreservedSource, phase: "切换前" | "切换期间") => void,
-): Promise<{cancelled: boolean}> {
+): Promise<{ cancelled: boolean }> {
     const verify = (source: PreservedSource, phase: "切换前" | "切换期间") => {
         let changed = false;
         try {

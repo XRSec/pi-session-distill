@@ -1,5 +1,28 @@
 # Changelog
 
+## 4.5.0 — Resumable merge tree for Pi Web full history
+
+- 新聚合 session 以 `cleanup_merge_root` 为根，将每个来源的完整 Pi session tree 复制为独立非 active 分支；entry
+  ID/parentId 安全重映射，原有分支结构保持不变。
+- 聚合 handoff 以 native `CompactionEntry` 作为最后追加的 active checkpoint；Pi active context 只包含
+  handoff，来源消息不会泄漏到后续模型上下文，pi-web“生成标题”也可正常读取会话内容。
+- 初始会话名称优先使用 LLM handoff 的 `scope.topic`，不再被 `scope.project` 文件系统路径覆盖。
+- pi-web“完整历史”可直接读取同一聚合 session 的全部来源分支；hidden gzip 继续提供原始 JSONL 字节级恢复与校验。
+- 新增按 source snapshot、模型、prompt version 和阶段输入哈希寻址的 checkpoint；输入哈希完全相同的 validated artifact 可跨
+  append-only source snapshot 变化复用，成功发布并完成 `/tmp` 来源移动后自动删除。
+- verifier 给出明确修复指令时最多执行五轮累计 targeted repair；仍不通过则继续拒绝发布。
+- previous handoff 的 active hard constraints 继续作为 canonical invariant；有证据的概括性 `supersedes` 不会被旧约束重新覆盖。
+- 对实际观测到的 `WebSocket error` 与 `fetch failed` 最多执行两次模型调用级有界重试；截断输出仍拒绝进入校验或 checkpoint。
+- `/tmp` 来源移动 manifest 改为原子 `0600` 替换更新，修复首个来源移动后因 create-only 写入触发 `EEXIST` 的半完成故障；成功后删除冻结快照。
+
+## 4.4.0 — Hidden exact history for multi-session handoff
+
+- 多个明确 session ID 的 handoff 产物现在嵌入每个来源文件的完整 session tree 原始字节，而不只保存 active-branch 状态摘要。
+- 原始来源使用 `gzip+base64` 分块写入 hidden Pi `custom` entries，不显示且不进入 LLM context。
+- 新增跨来源全局时间线，按 `timestamp → sourceIndex → lineIndex` 稳定排序，并为每条原始 JSONL 记录保存行 SHA-256。
+- 写入前后验证来源/压缩数据哈希、字节数、时间线哈希与顺序、行引用和 session 父链；失败时拒绝发布。
+- hidden history 按用户要求原样保留敏感值、thinking、工具详情和附件；可见报告、canonical handoff、日志和导出仍维持脱敏边界。
+
 ## 4.3.0 — Native single-session routing and verified source archive
 
 - `/cleanup this` 在当前会话原地追加 Pi native `CompactionEntry`。
@@ -13,11 +36,12 @@
 ### Result-First retrieval
 
 - 默认 handoff/capsule 不再把完整 User → Assistant thinking/tool → Tool output 流水账送给清洗模型。
-- 以“工作事务”的**最终 Assistant 结果**作为第一数据源；只要结果完整，原始 User 请求和 Tool output 均不重复输入。
+- 以“工作事务”的 **最终 Assistant 结果**作为第一数据源；只要结果完整，原始 User 请求和 Tool output 均不重复输入。
 - 只有事务中断、没有最终结果时，才降级保留最后的 Assistant 状态和少量结果型 Tool 证据。
 - 只有上述证据仍无法独立解释事务时，才回看 User 请求；`继续`、`开始`、进度催促等不作为独立知识输入。
 - 连续 `继续`/进度催促会并入尚未完成的上一工作事务，避免把一次长任务拆成大量伪会话块。
-- `read/search/grep/find` 等发现型工具默认不作为 durable result；验证、修改、错误、后台任务状态等结果型工具才可进入 fallback。
+- `read/search/grep/find` 等发现型工具默认不作为 durable result；验证、修改、错误、后台任务状态等结果型工具才可进入
+  fallback。
 
 ### Context pressure
 
@@ -27,7 +51,8 @@
 
 ### Compatibility
 
-- 旧 cleanup 会话若只有 `compaction.summary`、没有普通 message，默认 handoff 会在无其他结果记录时读取最新 summary 作为 legacy fallback。
+- 旧 cleanup 会话若只有 `compaction.summary`、没有普通 message，默认 handoff 会在无其他结果记录时读取最新 summary 作为
+  legacy fallback。
 - snapshot-first、secret redaction、canonical handoff、verifier 与原子发布机制保持不变。
 
 ## 4.0.0 — Agent State Handoff redesign
@@ -67,7 +92,8 @@
 
 ### Coding-agent state
 
-- canonical schema 新增 runtime environment：cwd/repository/branch/commit/worktree/tools/config keys/background jobs/external side effects。
+- canonical schema 新增 runtime environment：cwd/repository/branch/commit/worktree/tools/config keys/background
+  jobs/external side effects。
 - completed work 区分 verified/reported/partial/failed。
 - action 记录 priority、preconditions、side effect、approval requirement。
 
@@ -93,7 +119,10 @@
 
 ## 4.2.0 - 2026-08-19
 
-- Fixed result-first evidence loss in long unfinished tool turns: cleanup now preserves a bounded chronological set of durable Assistant milestones instead of only the latest status.
-- Strengthened extraction/consolidation/verifier prompts against resolved-state regression (resolved blockers, verified probes, explicit path supersession, and stale quantitative measurements).
-- Added Grok regression coverage for mail auth `401 -> 200`, live-probe completion, `Grok/cpa_proxy_state.json` authority, and node-health `67/215 -> 91/215 -> 191/215`.
+- Fixed result-first evidence loss in long unfinished tool turns: cleanup now preserves a bounded chronological set of
+  durable Assistant milestones instead of only the latest status.
+- Strengthened extraction/consolidation/verifier prompts against resolved-state regression (resolved blockers, verified
+  probes, explicit path supersession, and stale quantitative measurements).
+- Added Grok regression coverage for mail auth `401 -> 200`, live-probe completion, `Grok/cpa_proxy_state.json`
+  authority, and node-health `67/215 -> 91/215 -> 191/215`.
 - Updated handoff prompt version to `handoff-result-first-v1.2.0`.
