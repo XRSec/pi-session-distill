@@ -1,6 +1,6 @@
 {
   "name": "pi-session-distill",
-  "version": "4.5.0",
+  "version": "4.5.1",
   "private": false,
   "type": "module",
   "description": "Agent State Handoff cleanup, merge, verification, and repeatable re-cleaning for Pi sessions",
@@ -48,5 +48,8 @@
     "README.md",
     "REQUIREMENTS.md",
     "CHANGELOG.md"
-  ]
+  ],
+  "devDependencies": {
+    "@types/node": "^26.2.0"
+  }
 }

@@ -128,7 +128,7 @@ function archiveIdFor(manifest: Omit<HiddenHistoryManifest, "archiveId" | "creat
 }
 
 export function buildHiddenHistoryArchive(inputs: HistorySourceInput[]): HiddenHistoryArchive {
-    if (inputs.length < 2) throw new Error("隐藏完整历史仅用于多会话 handoff");
+    if (inputs.length === 0) throw new Error("隐藏完整历史至少需要一个源会话");
     const sourceChunks: HiddenHistorySourceChunk[] = [];
     const timeline: HiddenHistoryTimelineRecord[] = [];
     const sources: HiddenHistoryManifest["sources"] = [];
@@ -227,7 +227,7 @@ export function verifyHiddenHistoryArchive(archive: HiddenHistoryArchive): void 
     if (manifest.schema !== "session-distill-hidden-history/v1" || manifest.scope !== "full-session-tree") {
         throw new Error("隐藏历史验证失败: manifest schema/scope 无效");
     }
-    if (manifest.sourceCount !== manifest.sources.length || manifest.sourceCount < 2) throw new Error("隐藏历史验证失败: sourceCount 无效");
+    if (manifest.sourceCount !== manifest.sources.length || manifest.sourceCount < 1) throw new Error("隐藏历史验证失败: sourceCount 无效");
     const sourceLinesById = new Map<string, Array<{ rawLine: string; parsed: Record<string, unknown> }>>();
     for (const source of manifest.sources) {
         const raw = hiddenHistorySourceBytes(archive, source.sourceId);

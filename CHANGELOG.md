@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.5.1 — Pi 0.84.3 compaction lifecycle integration
+
+- `/cleanup this` 不再依赖 `ctx.compact()` 的 hook 后覆盖；它从当前 session 文件重新打开 active branch，再使用 Pi 官方 `prepareCompaction` 和 `keepRecentTokens: 0`，避免宿主在 hook 触发前按默认 20k 保留窗口误报 `Nothing to compact`，也避免 `/reload` 后旧命令上下文的内存分支快照误报“没有可提炼的消息”。
+- `/cleanup this` 改为 snapshot-first 原子重建同一 session：`cleanup_merge_root` 下 active sibling 仅显示 `CompactionEntry`，原 session entry tree 复制到 `cleanup_source_root` 非 active sibling，Pi Web“完整历史”可展开原消息；原始 JSONL 还以 `gzip+base64` 的 `cleanup_history_*` hidden entries 完整嵌入。
+- hidden archive 现在支持单来源，写入前后验证 source bytes/hash、压缩 hash、timeline 顺序/hash/逐行引用、非 active 原始树及 active tree；替换后验证失败会从冻结快照恢复原字节。交互式 `/cleanup this` 改为先切换到冻结 staging session、再发布 replacement、最后返回目标 session，消除刷新被取消后旧 runtime 继续写入失效 parentId 的 active-branch 断裂。返回目标 session 被外部 handler 取消时改为成功警告，不再误报 cleanup 失败。显式标题缺失时从首条用户消息生成 `session_info`，避免 Pi Web 显示 `(no messages)`。已有 checkpoint 后若只追加了 `thinking_level_change` 等元数据，full-span cleanup 仍会重新提炼当前有效 checkpoint 并继承文件操作记录。
+- 新增 full-span hidden archive 与单一可见上下文回归测试，并锁定 compaction 模型请求使用独立 routing session ID 且 `cacheRetention: "none"`。
+- `--print` 模式写入后不再调用同 session 的 `switchSession`，避免 checkpoint 已成功落盘但 CLI 进程不退出；非交互成功以退出码和 session 回读为准，stdout 可以为空。
+
 ## 4.5.0 — Resumable merge tree for Pi Web full history
 
 - 新聚合 session 以 `cleanup_merge_root` 为根，将每个来源的完整 Pi session tree 复制为独立非 active 分支；entry

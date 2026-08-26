@@ -33,15 +33,13 @@
 
 ## 单会话原地 Compaction
 
-1. `/cleanup this` 必须通过当前 Pi 上下文的 `ctx.compact()` 和 `session_before_compact` hook 运行，并将
-   `keepRecentTokens` 设为 `0`，执行显式 full-span compaction，只保留 Pi 要求的最小结构边界；其他自动或手动压缩继续使用 Pi
-   当前 compaction settings。
+1. `/cleanup this` 必须在冻结副本上使用 Pi 官方 `prepareCompaction` 并将 `keepRecentTokens` 设为 `0`；压缩前的整个有效会话（既有 checkpoint + 当前原始后缀）必须全部进入提炼输入。写入时原子重建同一 session：`cleanup_merge_root` 下 active 分支的 `CompactionEntry` 是唯一可见模型消息，原 session entry tree 必须复制到 `cleanup_source_root` sibling 非 active 分支，原 JSONL 精确字节还必须进入 `cleanup_history_manifest`、`cleanup_history_source_chunk`、`cleanup_history_timeline_chunk` hidden entries。其他自动或手动压缩继续通过 `session_before_compact` 使用 Pi 当前 compaction settings。
 2. 单个明确 ID 必须使用 Pi 官方 `prepareCompaction` 和当前 compaction settings，不复制 cut-point 算法。
 3. 指定 ID 在冻结 `0600` 副本上准备 compaction；写入前必须确认源文件身份、cwd、版本和 hash 未变化。
-4. checkpoint 生成成功后，使用 `SessionManager.appendCompaction()` 原地追加，并回读核对 entry ID、summary、
-   `firstKeptEntryId`、`tokensBefore` 和 profile。
-5. 没有可压缩内容时不得写入；生成或验证失败时不得伪造 fallback。
-6. 原地写入前创建权限受限的恢复快照，不删除该源会话。
+4. `/cleanup this` 在替换源文件前必须验证新 session 的 header、单一 merge root、active checkpoint、非 active 原始 entry tree、标题、父链、hidden archive ID、source/timeline hashes 和逐行引用；替换后必须回读复验，失败则从冻结快照恢复原字节。交互模式必须先把 runtime 切到安全 staging session，成功脱离源文件后才能替换；若首次切换被取消，源文件必须保持不变；若返回目标 session 被取消，不得把成功写入误报为 cleanup 失败，且 runtime 必须停留在 staging，避免旧父链继续写入 replacement。
+5. 单个明确 ID 的 checkpoint 生成成功后，继续使用 `SessionManager.appendCompaction()` 原地追加，并回读核对 entry ID、summary、`firstKeptEntryId`、`tokensBefore` 和 profile。
+6. 没有任何有效消息时不得写入；生成或验证失败时不得伪造 fallback。
+7. 原地写入前创建权限受限的恢复快照，不删除该源会话；`/cleanup this` 的 hidden archive 必须允许恢复原始 JSONL 的精确字节。
 
 ## 多会话 Handoff
 

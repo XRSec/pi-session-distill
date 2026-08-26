@@ -14,6 +14,49 @@ function entryId(): string {
     return crypto.randomBytes(4).toString("hex");
 }
 
+function appendHiddenHistoryEntries(
+    lines: Array<Record<string, unknown>>,
+    parentId: string,
+    timestamp: string,
+    history: HiddenHistoryArchive,
+): string {
+    const historyManifestId = entryId();
+    lines.push({
+        type: "custom",
+        id: historyManifestId,
+        parentId,
+        timestamp,
+        customType: "cleanup_history_manifest",
+        data: history.manifest,
+    });
+    let currentParentId = historyManifestId;
+    for (const chunk of history.sourceChunks) {
+        const id = entryId();
+        lines.push({
+            type: "custom",
+            id,
+            parentId: currentParentId,
+            timestamp,
+            customType: "cleanup_history_source_chunk",
+            data: chunk,
+        });
+        currentParentId = id;
+    }
+    for (const chunk of history.timelineChunks) {
+        const id = entryId();
+        lines.push({
+            type: "custom",
+            id,
+            parentId: currentParentId,
+            timestamp,
+            customType: "cleanup_history_timeline_chunk",
+            data: chunk,
+        });
+        currentParentId = id;
+    }
+    return currentParentId;
+}
+
 function parseHistorySourceEntries(history: HiddenHistoryArchive, sourceId: string): {
     header: Record<string, unknown>;
     entries: Array<Record<string, unknown>>
@@ -108,13 +151,18 @@ function verifyEntryTree(lines: Array<Record<string, unknown>>): void {
     if (visited.size !== entries.length) throw new Error("写后验证失败: session tree 存在不可达 entry");
 }
 
-function verifyMergedSourceBranches(lines: Array<Record<string, unknown>>, history: HiddenHistoryArchive): void {
-    const roots = lines.filter((line) => line.type === "custom" && line.customType === "cleanup_merge_root");
+function verifyMergedSourceBranches(
+    lines: Array<Record<string, unknown>>,
+    history: HiddenHistoryArchive,
+    summarySchema = "agent-handoff-markdown/v1",
+): void {
+    const roots = lines.filter((line) => line.type === "custom" && line.customType === "cleanup_merge_root" && line.parentId === null);
     if (roots.length !== 1 || typeof roots[0].id !== "string") throw new Error("写后验证失败: cleanup_merge_root 必须恰好一次");
     const rootId = roots[0].id as string;
     const markers = lines.filter((line) => line.type === "custom_message" && line.customType === "cleanup_source_root" && line.parentId === rootId);
     if (markers.length !== history.manifest.sourceCount) throw new Error("写后验证失败: 来源分支数量不一致");
-    const summaryIndex = lines.findIndex((line) => line.type === "compaction" && line.parentId === rootId && (line.details as Record<string, unknown> | undefined)?.schema === "agent-handoff-markdown/v1");
+    const summaryIndex = lines.findIndex((line) => line.type === "compaction" && line.parentId === rootId
+        && (line.details as Record<string, unknown> | undefined)?.schema === summarySchema);
     if (summaryIndex < 0) throw new Error("写后验证失败: 聚合摘要不在 active 根分支");
 
     for (const source of [...history.manifest.sources].sort((left, right) => left.sourceIndex - right.sourceIndex)) {
@@ -326,10 +374,14 @@ ${item.text}`;
 export function verifyChunkPartsSessionLines(lines: Array<Record<string, unknown>>, expectedItemCount: number, expectedSessionId: string, expectedManifestHash: string): void {
     const header = lines[0];
     if (!header || header.type !== "session" || header.version !== 3 || header.id !== expectedSessionId) throw new Error("写后验证失败: session header 无效");
-    const messages = lines.filter((line) => line.type === "message" && line.message?.role === "user");
+    const messages = lines.filter((line) => {
+        const message = line.message;
+        return line.type === "message" && typeof message === "object" && message !== null
+            && (message as Record<string, unknown>).role === "user";
+    });
     if (messages.length !== expectedItemCount) throw new Error(`写后验证失败: user 段数 ${messages.length} ≠ 预期 ${expectedItemCount}`);
     for (const [index, line] of messages.entries()) {
-        const content = line.message?.content;
+        const content = (line.message as Record<string, unknown>).content;
         const text = Array.isArray(content) && content[0] && typeof content[0] === "object" ? (content[0] as Record<string, unknown>).text : undefined;
         if (typeof text !== "string" || text.length === 0) throw new Error(`写后验证失败: user 段 ${index} 无正文`);
         if (!text.startsWith("[chunkPart ")) throw new Error(`写后验证失败: user 段 ${index} 缺 [chunkPart 头`);
@@ -346,6 +398,96 @@ export function verifyChunkPartsSessionLines(lines: Array<Record<string, unknown
     }
 }
 
+
+export function buildArchivedCompactionSessionLines(options: {
+    sessionId: string;
+    cwd: string;
+    summary: string;
+    tokensBefore: number;
+    history: HiddenHistoryArchive;
+    title?: string;
+    details?: Record<string, unknown>;
+    usage?: unknown;
+    headerTimestamp?: string;
+    timestamp?: string;
+}): Array<Record<string, unknown>> {
+    const timestamp = options.timestamp ?? new Date().toISOString();
+    const header = {
+        type: "session",
+        version: 3,
+        id: options.sessionId,
+        timestamp: options.headerTimestamp ?? timestamp,
+        cwd: options.cwd,
+    };
+    const rootId = entryId();
+    const lines: Array<Record<string, unknown>> = [header, {
+        type: "custom",
+        id: rootId,
+        parentId: null,
+        timestamp,
+        customType: "cleanup_merge_root",
+        data: {schema: "session-distill-merge-tree/v1", archiveId: options.history.manifest.archiveId},
+    }];
+    appendMergedSourceBranches(lines, rootId, timestamp, options.history);
+    const compactionId = entryId();
+    lines.push({
+        type: "compaction",
+        id: compactionId,
+        parentId: rootId,
+        timestamp,
+        summary: options.summary,
+        firstKeptEntryId: compactionId,
+        tokensBefore: options.tokensBefore,
+        fromHook: true,
+        ...(options.usage ? {usage: options.usage} : {}),
+        details: {
+            ...options.details,
+            schema: "session-distill-archived-compaction/v1",
+            historyArchiveId: options.history.manifest.archiveId,
+            historyRecordCount: options.history.manifest.recordCount,
+        },
+    });
+    let parentId = compactionId;
+    if (options.title) {
+        const infoId = entryId();
+        lines.push({type: "session_info", id: infoId, parentId, timestamp, name: options.title});
+        parentId = infoId;
+    }
+    appendHiddenHistoryEntries(lines, parentId, timestamp, options.history);
+    return lines;
+}
+
+export function verifyArchivedCompactionSessionLines(
+    lines: Array<Record<string, unknown>>,
+    expectedSessionId: string,
+    expectedSummary: string,
+    expectedArchiveId: string,
+): void {
+    const header = lines[0];
+    if (!header || header.type !== "session" || header.version !== 3 || header.id !== expectedSessionId) {
+        throw new Error("写后验证失败: archived compaction session header 无效");
+    }
+    const roots = lines.filter((line) => line.type === "custom" && line.customType === "cleanup_merge_root" && line.parentId === null);
+    if (roots.length !== 1 || typeof roots[0].id !== "string") {
+        throw new Error("写后验证失败: archived compaction merge root 无效");
+    }
+    const compactions = lines.filter((line) => line.type === "compaction" && line.parentId === roots[0].id
+        && (line.details as Record<string, unknown> | undefined)?.schema === "session-distill-archived-compaction/v1");
+    if (compactions.length !== 1 || compactions[0].summary !== expectedSummary
+        || compactions[0].firstKeptEntryId !== compactions[0].id) {
+        throw new Error("写后验证失败: archived compaction root 无效");
+    }
+    verifyEntryTree(lines);
+    const path = activePathEntries(lines);
+    const activeLines = [header, ...path];
+    const history = hiddenHistoryArchiveFromSessionLines(activeLines);
+    if (!history) throw new Error("写后验证失败: archived compaction 缺少 hidden history");
+    verifyMergedSourceBranches(lines, history, "session-distill-archived-compaction/v1");
+    verifyHiddenHistorySessionLines(activeLines, expectedArchiveId);
+    if (path[1]?.id !== compactions[0].id || path.some((entry) => entry.type === "message" || entry.type === "custom_message")) {
+        throw new Error("写后验证失败: archived compaction active path 无效");
+    }
+}
 
 export function buildHandoffSessionLines(options: {
     sessionId: string;
@@ -419,42 +561,7 @@ export function buildHandoffSessionLines(options: {
         data: options.report
     });
     parentId = reportEntryId;
-    if (options.history) {
-        const historyManifestId = entryId();
-        lines.push({
-            type: "custom",
-            id: historyManifestId,
-            parentId,
-            timestamp,
-            customType: "cleanup_history_manifest",
-            data: options.history.manifest
-        });
-        parentId = historyManifestId;
-        for (const chunk of options.history.sourceChunks) {
-            const id = entryId();
-            lines.push({
-                type: "custom",
-                id,
-                parentId,
-                timestamp,
-                customType: "cleanup_history_source_chunk",
-                data: chunk
-            });
-            parentId = id;
-        }
-        for (const chunk of options.history.timelineChunks) {
-            const id = entryId();
-            lines.push({
-                type: "custom",
-                id,
-                parentId,
-                timestamp,
-                customType: "cleanup_history_timeline_chunk",
-                data: chunk
-            });
-            parentId = id;
-        }
-    }
+    if (options.history) appendHiddenHistoryEntries(lines, parentId, timestamp, options.history);
     return lines;
 }
 

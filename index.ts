@@ -50,11 +50,13 @@ import {
     redactSecrets,
 } from "./textual.ts";
 import {
+    buildArchivedCompactionSessionLines,
     buildChunkPartsSessionLines,
     buildCleanSessionLinesFromResult,
     buildHandoffSessionLines,
     type ChunkPartItem,
     type TextualCleanupManifest,
+    verifyArchivedCompactionSessionLines,
     verifyChunkPartsSessionLines,
     verifyCleanSessionLines,
     verifyHandoffSessionLines,
@@ -66,6 +68,7 @@ import {
     atomicWriteNativeTextual,
     generateNativeCompaction,
     isExpectedCompactionCancelled,
+    NATIVE_COMPACTION_PROFILE,
     serializeOfficialMessages,
     textualCapturePath,
 } from "./native-compaction.ts";
@@ -262,6 +265,17 @@ function assistantText(content: unknown): string {
 function messageText(message: unknown): string {
     if (!message || typeof message !== "object" || Array.isArray(message)) return "";
     return assistantText((message as { content?: unknown }).content);
+}
+
+function sessionTitleFromBranch(entries: SessionEntry[]): string | undefined {
+    for (const entry of entries) {
+        if (entry.type !== "message") continue;
+        const message = entry.message;
+        if (message?.role !== "user") continue;
+        const title = messageText(message).replace(/\s+/g, " ").trim();
+        if (title) return title.slice(0, 120);
+    }
+    return undefined;
 }
 
 function messageTimestamp(message: unknown): string | undefined {
@@ -1700,16 +1714,149 @@ function splitOversizedHandoffBlock(block: string, maxChars = MAX_CHUNK_CHARS): 
     return parts.map((part, index) => `[oversized block part ${index + 1}/${parts.length}]\n${part}`);
 }
 
-async function runNativeCompaction(ctx: ExtensionCommandContext): Promise<void> {
+async function runNativeCompaction(
+    ctx: ExtensionCommandContext,
+    runId: string,
+    logger: RunLogger,
+): Promise<void> {
     await ctx.waitForIdle();
-    await new Promise<void>((resolve, reject) => {
-        ctx.compact({
-            customInstructions: NATIVE_COMPACTION_INSTRUCTIONS,
-            onComplete: () => resolve(),
-            onError: (error) => reject(error),
-        });
+    const sessionPath = ctx.sessionManager.getSessionFile();
+    if (!sessionPath) throw new Error("当前会话尚未持久化，无法写入 compaction checkpoint");
+
+    const source = captureSourceFingerprint(sessionPath);
+    const snapshot = createSnapshot([sessionPath], BACKUP_ROOT, runId);
+    const snapshotFile = path.join(snapshot.directory, snapshot.files[0].file);
+    if (snapshot.files[0].sha256 !== source.sha256 || snapshot.files[0].bytes !== source.bytes) {
+        throw new Error("当前会话冻结快照与源文件不一致");
+    }
+    const sourceManager = SessionManager.open(snapshotFile);
+    const sourceId = sourceManager.getSessionId();
+    const branchEntries = sourceManager.getBranch();
+    const effectiveMessages = sourceManager.buildSessionContext().messages;
+    const title = sourceManager.getSessionName() ?? sessionTitleFromBranch(branchEntries);
+    const headerTimestamp = sourceManager.getHeader()?.timestamp;
+    const hiddenHistory = buildHiddenHistoryArchive([{
+        sourceId,
+        sourceIndex: 0,
+        filePath: snapshotFile,
+        ...(title ? {name: title} : {}),
+        ...(typeof headerTimestamp === "string" ? {timestamp: headerTimestamp} : {}),
+    }]);
+    logger.write("current_hidden_history_prepared", {
+        archiveId: hiddenHistory.manifest.archiveId,
+        recordCount: hiddenHistory.manifest.recordCount,
+        sourceBytes: hiddenHistory.manifest.sources[0].bytes,
+        compressedBytes: hiddenHistory.manifest.sources[0].compressedBytes,
+        snapshotDirectory: snapshot.directory,
     });
-    ctx.ui.notify("当前会话已完成原生 compaction（session_before_compact 自定义 checkpoint）", "info");
+    const settings = SettingsManager.create(sourceManager.getCwd()).getCompactionSettings();
+    const cleanupSettings = {
+        ...settings,
+        keepRecentTokens: CLEANUP_THIS_KEEP_RECENT_TOKENS,
+    };
+    const preparation = await nativePrepareCompaction(branchEntries, cleanupSettings);
+    if (!preparation && effectiveMessages.length === 0) {
+        const lastType = branchEntries.at(-1)?.type ?? "none";
+        throw new Error(`当前会话没有可提炼的消息（branch entries: ${branchEntries.length}, last: ${lastType}）`);
+    }
+
+    const fullSpan = await fullSpanPreparation(preparation, effectiveMessages, branchEntries, cleanupSettings);
+    const generated = await generateNativeCompaction({
+        preparation: fullSpan,
+        signal: new AbortController().signal,
+    }, ctx);
+    const compaction = generated?.compaction;
+    if (!compaction?.summary?.trim()) throw new Error("当前会话 checkpoint 生成失败；源会话未修改");
+    const lines = buildArchivedCompactionSessionLines({
+        sessionId: sourceId,
+        cwd: sourceManager.getCwd(),
+        summary: compaction.summary,
+        tokensBefore: compaction.tokensBefore,
+        history: hiddenHistory,
+        ...(title ? {title} : {}),
+        details: compaction.details,
+        usage: compaction.usage,
+        ...(typeof headerTimestamp === "string" ? {headerTimestamp} : {}),
+    });
+    verifyArchivedCompactionSessionLines(
+        lines,
+        sourceId,
+        compaction.summary,
+        hiddenHistory.manifest.archiveId,
+    );
+    const originalBytes = fs.readFileSync(snapshotFile);
+    const replacementBytes = sessionJsonl(lines);
+    const writeReplacement = () => {
+        assertSourceFingerprint(sessionPath, source, "当前会话 compaction 写入前");
+        try {
+            atomicReplace0600(sessionPath, replacementBytes);
+            const writtenLines = parseJsonLines(fs.readFileSync(sessionPath, "utf8").split("\n"));
+            verifyArchivedCompactionSessionLines(
+                writtenLines,
+                sourceId,
+                compaction.summary,
+                hiddenHistory.manifest.archiveId,
+            );
+        } catch (error) {
+            atomicReplace0600(sessionPath, originalBytes);
+            throw error;
+        }
+        logger.write("current_archived_compaction_written", {
+            sessionPath,
+            archiveId: hiddenHistory.manifest.archiveId,
+            visibleSummaryChars: compaction.summary.length,
+            hiddenRecordCount: hiddenHistory.manifest.recordCount,
+            snapshotDirectory: snapshot.directory,
+        });
+    };
+
+    const successMessage = `当前会话已完成 full-span compaction；active context 仅保留 checkpoint，完整历史分支与 ${hiddenHistory.manifest.recordCount} 条 hidden archive 记录均已保存`;
+    if (ctx.mode === "print") {
+        writeReplacement();
+        ctx.ui.notify(successMessage, "info");
+        return;
+    }
+
+    // 不能在当前 runtime 仍绑定源文件时原地覆盖后再 switchSession：若 session_before_switch
+    // 取消刷新，旧 SessionManager 会继续向新文件追加旧 parentId，导致 active branch 断裂。
+    // 先切到冻结快照的临时副本；只有成功脱离源文件后才发布 replacement。
+    const stagingPath = path.join(os.tmpdir(), `session-distill-refresh-${runId}.jsonl`);
+    const firstNewline = originalBytes.indexOf(0x0a);
+    if (firstNewline < 0) throw new Error("当前会话快照缺少 JSONL header 换行");
+    const originalHeader = parseJsonLines([originalBytes.subarray(0, firstNewline).toString("utf8")])[0];
+    if (!originalHeader) throw new Error("当前会话快照缺少 JSONL header");
+    const stagingHeader = {
+        ...originalHeader,
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+    };
+    const stagingBytes = Buffer.concat([
+        Buffer.from(`${JSON.stringify(stagingHeader)}\n`),
+        originalBytes.subarray(firstNewline + 1),
+    ]);
+    atomicWrite0600(stagingPath, stagingBytes);
+    let detached = false;
+    try {
+        const staged = await ctx.switchSession(stagingPath, {
+            withSession: async (stagingCtx) => {
+                detached = true;
+                writeReplacement();
+                const refreshed = await stagingCtx.switchSession(sessionPath, {
+                    withSession: async (freshCtx) => {
+                        fs.rmSync(stagingPath, {force: true});
+                        freshCtx.ui.notify(successMessage, "info");
+                    },
+                });
+                if (refreshed.cancelled) {
+                    logger.write("current_session_refresh_cancelled", {sessionPath, stagingPath});
+                    stagingCtx.ui.notify(`checkpoint 已写入；自动返回原会话被取消，请手动重新打开：${sessionPath}`, "warning");
+                }
+            },
+        });
+        if (staged.cancelled) throw new Error("当前会话刷新被取消；源会话未修改");
+    } finally {
+        if (!detached) fs.rmSync(stagingPath, {force: true});
+    }
 }
 
 async function nativePrepareCompaction(entries: SessionEntry[], settings: unknown): Promise<any> {
@@ -1718,6 +1865,37 @@ async function nativePrepareCompaction(entries: SessionEntry[], settings: unknow
     const nativeModule = await import(moduleUrl.href);
     if (typeof nativeModule.prepareCompaction !== "function") throw new Error("当前 Pi 未提供原生 prepareCompaction");
     return nativeModule.prepareCompaction(entries, settings);
+}
+
+async function fullSpanPreparation(
+    preparation: any,
+    effectiveMessages: unknown[],
+    branchEntries: SessionEntry[],
+    settings: unknown,
+): Promise<any> {
+    const packageEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
+    const utilsUrl = new URL("./core/compaction/utils.js", packageEntry);
+    const compactionUrl = new URL("./core/compaction/compaction.js", packageEntry);
+    const [utils, compaction] = await Promise.all([import(utilsUrl.href), import(compactionUrl.href)]);
+    const fileOps = preparation?.fileOps ?? utils.createFileOps();
+    if (!preparation) {
+        const previous = branchEntries.findLast((entry) => entry.type === "compaction") as any;
+        for (const file of previous?.details?.readFiles ?? []) fileOps.read.add(file);
+        for (const file of previous?.details?.modifiedFiles ?? []) fileOps.written.add(file);
+    }
+    for (const message of effectiveMessages) utils.extractFileOpsFromMessage(message, fileOps);
+    return {
+        ...preparation,
+        firstKeptEntryId: preparation?.firstKeptEntryId ?? branchEntries.at(-1)?.id,
+        tokensBefore: preparation?.tokensBefore ?? compaction.estimateContextTokens(effectiveMessages).tokens,
+        settings: preparation?.settings ?? settings,
+        fileOps,
+        messagesToSummarize: effectiveMessages,
+        turnPrefixMessages: [],
+        isSplitTurn: false,
+        previousSummary: undefined,
+        fullSpan: true,
+    };
 }
 
 async function runSpecifiedNativeCompaction(command: CleanupCommandOptions, ctx: ExtensionCommandContext, runId: string, logger: RunLogger): Promise<void> {
@@ -2407,7 +2585,7 @@ export default function (pi: ExtensionAPI) {
                 }
                 logger = command.mode === "textual" ? createNoopLogger() : new CleanupRunLogger(runId);
                 if (command.mode === "handoff" && command.sourceTokens.length === 1 && command.sourceTokens[0] === "this") {
-                    await runNativeCompaction(ctx);
+                    await runNativeCompaction(ctx, runId, logger);
                     return;
                 }
                 logger.write("cleanup_started", {
@@ -2451,16 +2629,7 @@ export default function (pi: ExtensionAPI) {
             return {cancel: true};
         }
         try {
-            let compactionEvent = event;
-            if (event.reason === "manual" && event.customInstructions === NATIVE_COMPACTION_INSTRUCTIONS) {
-                const settings = event.preparation.settings;
-                const preparation = await nativePrepareCompaction(event.branchEntries, {
-                    ...settings,
-                    keepRecentTokens: Math.min(settings.keepRecentTokens, CLEANUP_THIS_KEEP_RECENT_TOKENS),
-                });
-                if (preparation) compactionEvent = {...event, preparation};
-            }
-            return await generateNativeCompaction(compactionEvent, ctx);
+            return await generateNativeCompaction(event, ctx);
         } catch (error) {
             if (!event.signal?.aborted) ctx.ui?.notify?.(`自定义 compaction checkpoint 失败，回退 Pi 原生摘要: ${safeError(error)}`, "warning");
             return undefined;

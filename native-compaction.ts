@@ -105,7 +105,9 @@ export function buildNativeCompactionPromptInput(preparation: any): string {
         prefix,
         "",
         "[retained_suffix_note]",
-        `The recent suffix starting at firstKeptEntryId=${String(preparation?.firstKeptEntryId ?? "unknown")} remains verbatim in Pi context and is intentionally not repeated here.`,
+        preparation?.fullSpan === true
+            ? `Full-span cleanup: every effective message is included above. Pi still retains its required boundary at firstKeptEntryId=${String(preparation?.firstKeptEntryId ?? "unknown")}, but that boundary content must also be reflected in the checkpoint.`
+            : `The recent suffix starting at firstKeptEntryId=${String(preparation?.firstKeptEntryId ?? "unknown")} remains verbatim in Pi context and is intentionally not repeated here.`,
     ].join("\n");
 }
 
