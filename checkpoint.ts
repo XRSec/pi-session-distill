@@ -1,10 +1,9 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import {atomicWrite0600} from "./core.ts";
 
-const CHECKPOINT_ROOT = process.env.SESSION_DISTILL_CHECKPOINT_ROOT || path.join(os.homedir(), ".pi", "agent", "session-distill-checkpoints");
+const CHECKPOINT_ROOT = process.env.SESSION_DISTILL_CHECKPOINT_ROOT || path.join("/tmp", "session-distill-checkpoints");
 
 function sha256(value: string): string {
     return crypto.createHash("sha256").update(value).digest("hex");

@@ -87,8 +87,10 @@ TUI 中使用 (或先用 `--textual` 离线检查)。
 模型阶段产物保存在：
 
 ```text
-~/.pi/agent/session-distill-checkpoints/<checkpoint-key>/
+/tmp/session-distill-checkpoints/<checkpoint-key>/
 ```
+
+可通过 `SESSION_DISTILL_CHECKPOINT_ROOT` 覆盖默认目录；清洗前快照默认写入 `/tmp/session-distill-backups/`，也可通过 `SESSION_DISTILL_BACKUP_ROOT` 覆盖。文本/JSON 导出默认写入 `/tmp/session-distill-exports/`，可通过 `SESSION_DISTILL_EXPORT_ROOT` 覆盖。日志、冻结副本和刷新 staging 也只写入 `/tmp`。这些目录都可能被系统清理。
 
 checkpoint key 由来源 snapshot SHA-256、模型和 prompt version 决定；每个 artifact 再核对阶段输入哈希。已经通过 schema
 校验且输入哈希完全相同的 fragment、consolidation、review 和 repair 可在同模型、同 prompt version 下跨 append-only snapshot

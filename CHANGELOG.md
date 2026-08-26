@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- cleanup 安全快照、模型阶段 checkpoint、文本/JSON 导出、日志、冻结副本与刷新 staging 全部默认写入字面路径 `/tmp`，不再把辅助数据写入 `~/.pi/agent`；backup、checkpoint、export 根目录分别可用 `SESSION_DISTILL_BACKUP_ROOT`、`SESSION_DISTILL_CHECKPOINT_ROOT`、`SESSION_DISTILL_EXPORT_ROOT` 覆盖。
+
 ## 4.5.1 — Pi 0.84.3 compaction lifecycle integration
 
 - `/cleanup this` 不再依赖 `ctx.compact()` 的 hook 后覆盖；它从当前 session 文件重新打开 active branch，再使用 Pi 官方 `prepareCompaction` 和 `keepRecentTokens: 0`，避免宿主在 hook 触发前按默认 20k 保留窗口误报 `Nothing to compact`，也避免 `/reload` 后旧命令上下文的内存分支快照误报“没有可提炼的消息”。

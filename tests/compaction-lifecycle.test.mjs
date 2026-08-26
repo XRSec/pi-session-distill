@@ -4,9 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {SessionManager} from "@earendil-works/pi-coding-agent";
-import installExtension from "../index.ts";
 import {hiddenHistoryArchiveFromSessionLines, hiddenHistorySourceBytes} from "../history.ts";
 import {generateNativeCompaction} from "../native-compaction.ts";
+
+const backupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "session-distill-backup-test-"));
+process.env.SESSION_DISTILL_BACKUP_ROOT = backupRoot;
+process.on("exit", () => fs.rmSync(backupRoot, {recursive: true, force: true}));
+const {default: installExtension} = await import("../index.ts");
 
 function archivedSourceBytes(file, sourceId) {
     const manager = SessionManager.open(file);
