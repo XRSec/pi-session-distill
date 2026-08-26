@@ -185,7 +185,9 @@ test("handoff session 以 hidden custom entries 持久化并回读完整历史",
         assert.ok(lines.filter((line) => line.customType?.startsWith("cleanup_history_")).every((line) => line.type === "custom"));
         const mergeRoot = lines.find((line) => line.customType === "cleanup_merge_root");
         assert.ok(mergeRoot);
-        assert.equal(lines.filter((line) => line.customType === "cleanup_source_root" && line.parentId === mergeRoot.id).length, 2);
+        const sourceRoots = lines.filter((line) => line.customType === "cleanup_source_root" && line.parentId === mergeRoot.id);
+        assert.equal(sourceRoots.length, 2);
+        assert.ok(sourceRoots.every((line) => line.display === false));
         const handoff = lines.find((line) => line.type === "compaction" && line.details?.reportId === "report-test");
         assert.equal(handoff?.parentId, mergeRoot.id);
         assert.equal(handoff?.summary, "Visible handoff");

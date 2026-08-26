@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.5.3 — Pi Web cleanup refresh and model settings
+
+- 新增 `~/.pi/agent/pi-session-distill.json` 默认清洗模型设置；首次交互使用时从 Pi 可用模型列表选择，`/cleanup model` 可重新配置，配置模型不可用时回退当前会话模型。
+- `/cleanup this` 在 Pi Web RPC 模式下不再调用被宿主固定取消的 `switchSession`；原子写入后重新加载当前 `SessionManager`，再通过同文件 tree navigation 刷新 Agent context 与页面，刷新被拒绝时恢复原始会话字节。
+- compaction branch metadata 使用短标签 `PSD M/A MM/DD HH:mm`，不再附加冗长会话标题；原历史继续保存在隐藏 sibling branch，active context 仅保留 checkpoint。
+- 新增 Pi Web RPC 成功刷新、拒绝回滚、模型选择与回退回归测试。
+
 ## 4.5.2 — Temporary artifact paths
 
 - cleanup 安全快照、模型阶段 checkpoint、文本/JSON 导出、日志、冻结副本与刷新 staging 全部默认写入字面路径 `/tmp`，不再把辅助数据写入 `~/.pi/agent`；backup、checkpoint、export 根目录分别可用 `SESSION_DISTILL_BACKUP_ROOT`、`SESSION_DISTILL_CHECKPOINT_ROOT`、`SESSION_DISTILL_EXPORT_ROOT` 覆盖。

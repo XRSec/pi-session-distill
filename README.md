@@ -21,9 +21,28 @@ LLM handoff 的主题，不使用文件系统项目路径。原始 JSONL 字节�
 保存并建立跨来源时间线索引。只有质量门禁、树结构、hidden history、原子写入、回读以及全部源文件一致性检查都通过后，才会把来源临时移动到
 `/tmp/session-distill-sources-<run-id>/`。失败时不发布无效结果，也不移动来源。
 
+## 默认清洗模型
+
+首次启动时，扩展读取 `~/.pi/agent/pi-session-distill.json`。文件不存在、为空或尚未设置 `defaultLlmModel` 时，会从 Pi 当前可用模型列表弹出 **Default LLM Model** 选择框，并以 `0600` 权限保存：
+
+```json
+{
+  "defaultLlmModel": {
+    "provider": "openai",
+    "id": "gpt-5.6-sol"
+  }
+}
+```
+
+后续所有 LLM 清洗优先使用该模型；如果模型已移除、未认证或因当前配置不可用，则自动使用当前会话模型。非交互模式无法弹出首次选择框，在配置完成前同样使用当前会话模型。需要主动更换时执行：
+
+```text
+/cleanup model
+```
+
 ## 接管 Pi 压缩事件
 
-无需额外配置。扩展加载后会自动注册 Pi 的 `session_before_compact` hook，点击压缩、执行 `/compact` 或触发自动压缩时都会由
+扩展加载后会自动注册 Pi 的 `session_before_compact` hook，点击压缩、执行 `/compact` 或触发自动压缩时都会由
 `session-distill` 接管摘要生成；失败时回退到 Pi 原生摘要。这些入口继续使用 Pi 当前的压缩设置。显式执行 `/cleanup this` 时则直接用 Pi 官方 `prepareCompaction` 进行
 full-span compaction：把压缩前的整个有效会话（既有 checkpoint + 当前原始后缀）全部交给提炼模型，将近期原文保留窗口设为 `0`。写入时原子重建同一个 session：`cleanup_merge_root` 下的 active 分支仅包含 native `CompactionEntry`、标题和 hidden archive，完整原 session tree 位于 sibling 非 active 分支；普通界面和模型上下文只看到 checkpoint，“完整历史”可展开全部原始消息，同时 `cleanup_history_*` 保存可校验的精确 JSONL 字节。
 
@@ -47,6 +66,8 @@ pi --no-session "/cleanup 15e1ab4f-2b8d-47c2-a1c0-f0097e18e110" --print
 
 单会话清理 (`/cleanup this` 或 `/cleanup <session-id>`)适合这种非交互调用;多会话聚合 handoff 需要交互确认/移动源文件,建议在交互式
 TUI 中使用 (或先用 `--textual` 离线检查)。
+
+固定基线的“复制 → CLI 清洗 → 回读 → 页面链接”真实回归流程见 [`CLEANUP_SMOKE.md`](./CLEANUP_SMOKE.md)，可直接运行 `npm run smoke:cleanup`。
 
 ## Textual 检查
 

@@ -1,6 +1,6 @@
 {
   "name": "pi-session-distill",
-  "version": "4.5.2",
+  "version": "4.5.3",
   "private": false,
   "type": "module",
   "description": "Agent State Handoff cleanup, merge, verification, and repeatable re-cleaning for Pi sessions",
@@ -21,6 +21,7 @@
   },
   "scripts": {
     "analyze": "node --experimental-strip-types scripts/analyze-session.ts",
+    "smoke:cleanup": "node scripts/pi-web-cleanup-smoke.mjs",
     "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "pi": {
@@ -39,6 +40,7 @@
     "history.ts",
     "native-compaction.ts",
     "session-writer.ts",
+    "settings.ts",
     "textual.ts",
     "standalone.ts",
     "schemas",

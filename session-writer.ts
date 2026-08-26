@@ -19,8 +19,10 @@ function appendHiddenHistoryEntries(
     parentId: string,
     timestamp: string,
     history: HiddenHistoryArchive,
+    activeLeafId?: string,
 ): string {
-    const historyManifestId = entryId();
+    const chunkCount = history.sourceChunks.length + history.timelineChunks.length;
+    const historyManifestId = chunkCount === 0 && activeLeafId ? activeLeafId : entryId();
     lines.push({
         type: "custom",
         id: historyManifestId,
@@ -30,8 +32,10 @@ function appendHiddenHistoryEntries(
         data: history.manifest,
     });
     let currentParentId = historyManifestId;
+    let chunkIndex = 0;
     for (const chunk of history.sourceChunks) {
-        const id = entryId();
+        const id = activeLeafId && chunkIndex === chunkCount - 1 ? activeLeafId : entryId();
+        chunkIndex += 1;
         lines.push({
             type: "custom",
             id,
@@ -43,7 +47,8 @@ function appendHiddenHistoryEntries(
         currentParentId = id;
     }
     for (const chunk of history.timelineChunks) {
-        const id = entryId();
+        const id = activeLeafId && chunkIndex === chunkCount - 1 ? activeLeafId : entryId();
+        chunkIndex += 1;
         lines.push({
             type: "custom",
             id,
@@ -88,7 +93,7 @@ function appendMergedSourceBranches(lines: Array<Record<string, unknown>>, rootI
             timestamp: markerTimestamp,
             customType: "cleanup_source_root",
             content: [{type: "text", text: `完整来源会话：${source.name || source.sourceId}`}],
-            display: true,
+            display: false,
             details: {sourceId: source.sourceId, sourceSha256: source.sha256, originalEntryCount: entries.length},
         });
         const idMap = new Map<string, string>();
@@ -161,6 +166,7 @@ function verifyMergedSourceBranches(
     const rootId = roots[0].id as string;
     const markers = lines.filter((line) => line.type === "custom_message" && line.customType === "cleanup_source_root" && line.parentId === rootId);
     if (markers.length !== history.manifest.sourceCount) throw new Error("写后验证失败: 来源分支数量不一致");
+    if (markers.some((line) => line.display !== false)) throw new Error("写后验证失败: 来源分支入口必须在普通视图隐藏");
     const summaryIndex = lines.findIndex((line) => line.type === "compaction" && line.parentId === rootId
         && (line.details as Record<string, unknown> | undefined)?.schema === summarySchema);
     if (summaryIndex < 0) throw new Error("写后验证失败: 聚合摘要不在 active 根分支");
@@ -410,6 +416,8 @@ export function buildArchivedCompactionSessionLines(options: {
     usage?: unknown;
     headerTimestamp?: string;
     timestamp?: string;
+    activeLeafId?: string;
+    compactionTrigger: "manual" | "automatic";
 }): Array<Record<string, unknown>> {
     const timestamp = options.timestamp ?? new Date().toISOString();
     const header = {
@@ -429,6 +437,8 @@ export function buildArchivedCompactionSessionLines(options: {
         data: {schema: "session-distill-merge-tree/v1", archiveId: options.history.manifest.archiveId},
     }];
     appendMergedSourceBranches(lines, rootId, timestamp, options.history);
+    const compactTime = new Date(timestamp).toISOString().slice(5, 16).replace("T", " ").replace("-", "/");
+    const branchLabel = `PSD ${options.compactionTrigger === "automatic" ? "A" : "M"} ${compactTime}`;
     const compactionId = entryId();
     lines.push({
         type: "compaction",
@@ -445,6 +455,9 @@ export function buildArchivedCompactionSessionLines(options: {
             schema: "session-distill-archived-compaction/v1",
             historyArchiveId: options.history.manifest.archiveId,
             historyRecordCount: options.history.manifest.recordCount,
+            branchLabel,
+            compactionTrigger: options.compactionTrigger,
+            compactionTimestamp: timestamp,
         },
     });
     let parentId = compactionId;
@@ -453,7 +466,7 @@ export function buildArchivedCompactionSessionLines(options: {
         lines.push({type: "session_info", id: infoId, parentId, timestamp, name: options.title});
         parentId = infoId;
     }
-    appendHiddenHistoryEntries(lines, parentId, timestamp, options.history);
+    appendHiddenHistoryEntries(lines, parentId, timestamp, options.history, options.activeLeafId);
     return lines;
 }
 
@@ -473,8 +486,12 @@ export function verifyArchivedCompactionSessionLines(
     }
     const compactions = lines.filter((line) => line.type === "compaction" && line.parentId === roots[0].id
         && (line.details as Record<string, unknown> | undefined)?.schema === "session-distill-archived-compaction/v1");
+    const compactionDetails = compactions[0]?.details as Record<string, unknown> | undefined;
     if (compactions.length !== 1 || compactions[0].summary !== expectedSummary
-        || compactions[0].firstKeptEntryId !== compactions[0].id) {
+        || compactions[0].firstKeptEntryId !== compactions[0].id
+        || !/^PSD [MA] \d{2}\/\d{2} \d{2}:\d{2}$/.test(String(compactionDetails?.branchLabel ?? ""))
+        || !["manual", "automatic"].includes(String(compactionDetails?.compactionTrigger))
+        || !/^\d{4}-\d{2}-\d{2}T/.test(String(compactionDetails?.compactionTimestamp ?? ""))) {
         throw new Error("写后验证失败: archived compaction root 无效");
     }
     verifyEntryTree(lines);

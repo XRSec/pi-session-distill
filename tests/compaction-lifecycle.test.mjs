@@ -107,9 +107,115 @@ test("/cleanup this 从会话文件重建完整上下文并刷新为单一可见
     assert.ok(contextEntries.slice(1).every((entry) => entry.type === "custom" || entry.type === "session_info"));
     assert.equal(reopened.getSessionName(), "WHOLE-SESSION-START");
     assert.equal(reopened.getEntries().filter((entry) => entry.type === "message").length, 2);
-    assert.equal(reopened.getEntries().some((entry) => entry.type === "custom_message" && entry.customType === "cleanup_source_root"), true);
+    assert.match(contextEntries[0].details.branchLabel, /^PSD M \d{2}\/\d{2} \d{2}:\d{2}$/);
+    assert.equal(contextEntries[0].details.compactionTrigger, "manual");
+    assert.match(contextEntries[0].details.compactionTimestamp, /^\d{4}-\d{2}-\d{2}T/);
+    const mergeRoot = reopened.getEntries().find((entry) => entry.type === "custom" && entry.customType === "cleanup_merge_root");
+    const sourceRoot = reopened.getEntries().find((entry) => entry.type === "custom_message" && entry.customType === "cleanup_source_root");
+    assert.ok(mergeRoot);
+    assert.equal(sourceRoot?.parentId, mergeRoot.id);
+    assert.equal(sourceRoot?.display, false);
+    assert.equal(contextEntries[0].parentId, mergeRoot.id);
+    assert.equal(reopened.getBranch().some((entry) => entry.id === sourceRoot.id), false);
     assert.deepEqual(reopened.buildSessionContext().messages.map((message) => message.role), ["compactionSummary"]);
     assert.deepEqual(archivedSourceBytes(sessionFile, manager.getSessionId()), originalBytes);
+});
+
+test("/cleanup this --print 对短会话也会重建隐藏历史分支", async (t) => {
+    const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-session-distill-short-"));
+    t.after(() => fs.rmSync(sessionDir, {recursive: true, force: true}));
+    const cwd = path.join(sessionDir, "project");
+    fs.mkdirSync(cwd);
+    const manager = SessionManager.create(cwd, sessionDir);
+    manager.appendMessage({role: "user", content: [{type: "text", text: "short input"}], timestamp: 1});
+    manager.appendMessage({role: "assistant", content: [{type: "text", text: "short result"}], timestamp: 2});
+    const sessionFile = manager.getSessionFile();
+    const originalBytes = fs.readFileSync(sessionFile);
+    const ctx = {
+        cwd,
+        mode: "print",
+        waitForIdle: async () => {},
+        sessionManager: {getSessionFile: () => sessionFile},
+        model: {provider: "test", id: "model"},
+        modelRegistry: {
+            async complete() {
+                return {content: [{type: "text", text: "short-checkpoint"}], usage: {input: 1, output: 1, totalTokens: 2}};
+            },
+        },
+        ui: {notify() {}},
+        compact() {
+            assert.fail("print 模式不应经过 Pi 的 compaction 阈值门");
+        },
+    };
+
+    await registeredCleanup().handler("this", ctx);
+    manager.appendCustomEntry("stale_runtime_state", {saved: true});
+
+    const reopened = SessionManager.open(sessionFile);
+    assert.equal(reopened.getBranch().at(-1)?.customType, "stale_runtime_state");
+    assert.match(reopened.buildContextEntries()[0].details.branchLabel, /^PSD M \d{2}\/\d{2} \d{2}:\d{2}$/);
+    const mergeRoot = reopened.getEntries().find((entry) => entry.type === "custom" && entry.customType === "cleanup_merge_root");
+    const sourceRoot = reopened.getEntries().find((entry) => entry.type === "custom_message" && entry.customType === "cleanup_source_root");
+    assert.ok(mergeRoot);
+    assert.equal(sourceRoot?.parentId, mergeRoot.id);
+    assert.equal(sourceRoot?.display, false);
+    assert.equal(reopened.getEntries().some((entry) => entry.customType === "cleanup_full_span_boundary"), false);
+    assert.deepEqual(reopened.buildSessionContext().messages.map((message) => message.role), ["compactionSummary"]);
+    assert.deepEqual(archivedSourceBytes(sessionFile, manager.getSessionId()), originalBytes);
+});
+
+test("/cleanup this 在 Pi Web RPC 模式刷新分支，并在刷新被拒绝时回滚", async (t) => {
+    const runCase = async (refreshFails) => {
+        const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-session-distill-rpc-"));
+        t.after(() => fs.rmSync(sessionDir, {recursive: true, force: true}));
+        const cwd = path.join(sessionDir, "project");
+        fs.mkdirSync(cwd);
+        const manager = SessionManager.create(cwd, sessionDir);
+        manager.appendMessage({role: "user", content: [{type: "text", text: "rpc input"}], timestamp: 1});
+        manager.appendMessage({role: "assistant", content: [{type: "text", text: "rpc result"}], timestamp: 2});
+        const sessionFile = manager.getSessionFile();
+        const originalBytes = fs.readFileSync(sessionFile);
+        let navigations = 0;
+        const ctx = {
+            cwd,
+            mode: "rpc",
+            waitForIdle: async () => {},
+            sessionManager: manager,
+            model: {provider: "test", id: "model"},
+            modelRegistry: {
+                async complete() {
+                    return {content: [{type: "text", text: "rpc-checkpoint"}], usage: {input: 1, output: 1, totalTokens: 2}};
+                },
+            },
+            ui: {notify() {}},
+            async navigateTree(targetId) {
+                navigations++;
+                if (refreshFails) return {cancelled: true};
+                manager.branch(targetId);
+                return {cancelled: false};
+            },
+            async reload() {
+                assert.fail("RPC 模式不应依赖宿主 reload 实现");
+            },
+            async switchSession() {
+                assert.fail("RPC 模式不应调用 switchSession");
+            },
+        };
+
+        if (refreshFails) {
+            await assert.rejects(registeredCleanup().handler("this", ctx), /源会话已恢复: Pi Web 拒绝刷新/);
+            assert.deepEqual(fs.readFileSync(sessionFile), originalBytes);
+        } else {
+            await registeredCleanup().handler("this", ctx);
+            const reopened = SessionManager.open(sessionFile);
+            assert.equal(reopened.buildContextEntries()[0].summary, "rpc-checkpoint");
+            assert.deepEqual(reopened.buildSessionContext().messages.map((message) => message.role), ["compactionSummary"]);
+        }
+        assert.equal(navigations, 1);
+    };
+
+    await runCase(false);
+    await runCase(true);
 });
 
 test("/cleanup this 返回原会话被取消时留在安全 staging 且不误报写入失败", async (t) => {
@@ -215,6 +321,7 @@ test("/cleanup this 可再次提炼以 thinking_level_change 结尾的既有 che
     assert.ok(contextEntries.slice(1).every((entry) => entry.type === "custom" || entry.type === "session_info"));
     assert.equal(reopened.getSessionName(), "old input");
     assert.equal(reopened.getEntries().filter((entry) => entry.type === "message").length, 2);
+    assert.match(contextEntries[0].details.branchLabel, /^PSD M \d{2}\/\d{2} \d{2}:\d{2}$/);
     assert.equal(reopened.getEntries().some((entry) => entry.type === "custom_message" && entry.customType === "cleanup_source_root"), true);
     assert.deepEqual(reopened.buildSessionContext().messages.map((message) => message.role), ["compactionSummary"]);
     assert.deepEqual(contextEntries[0].details.readFiles, ["read.ts"]);
