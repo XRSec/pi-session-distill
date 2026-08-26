@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 4.5.2 — Temporary artifact paths
 
 - cleanup 安全快照、模型阶段 checkpoint、文本/JSON 导出、日志、冻结副本与刷新 staging 全部默认写入字面路径 `/tmp`，不再把辅助数据写入 `~/.pi/agent`；backup、checkpoint、export 根目录分别可用 `SESSION_DISTILL_BACKUP_ROOT`、`SESSION_DISTILL_CHECKPOINT_ROOT`、`SESSION_DISTILL_EXPORT_ROOT` 覆盖。
 

@@ -1,6 +1,6 @@
 {
   "name": "pi-session-distill",
-  "version": "4.5.1",
+  "version": "4.5.2",
   "private": false,
   "type": "module",
   "description": "Agent State Handoff cleanup, merge, verification, and repeatable re-cleaning for Pi sessions",
