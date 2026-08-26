@@ -5,11 +5,16 @@ import path from "node:path";
 import test from "node:test";
 import {SessionManager} from "@earendil-works/pi-coding-agent";
 import {hiddenHistoryArchiveFromSessionLines, hiddenHistorySourceBytes} from "../history.ts";
-import {generateNativeCompaction} from "../native-compaction.ts";
+import {generateNativeCompaction, removeNativeCompactionCheckpoint} from "../native-compaction.ts";
 
 const backupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "session-distill-backup-test-"));
+const checkpointRoot = fs.mkdtempSync(path.join(os.tmpdir(), "session-distill-native-checkpoint-test-"));
 process.env.SESSION_DISTILL_BACKUP_ROOT = backupRoot;
-process.on("exit", () => fs.rmSync(backupRoot, {recursive: true, force: true}));
+process.env.SESSION_DISTILL_CHECKPOINT_ROOT = checkpointRoot;
+process.on("exit", () => {
+    fs.rmSync(backupRoot, {recursive: true, force: true});
+    fs.rmSync(checkpointRoot, {recursive: true, force: true});
+});
 const {default: installExtension} = await import("../index.ts");
 
 function archivedSourceBytes(file, sourceId) {
@@ -27,6 +32,17 @@ function registeredCleanup() {
     });
     assert.ok(cleanup);
     return cleanup;
+}
+
+function registeredLifecycleHandlers() {
+    const handlers = new Map();
+    installExtension({
+        registerCommand() {},
+        on(name, handler) {
+            handlers.set(name, handler);
+        },
+    });
+    return handlers;
 }
 
 test("/cleanup this 从会话文件重建完整上下文并刷新为单一可见 checkpoint", async (t) => {
@@ -336,7 +352,48 @@ test("/cleanup this 可再次提炼以 thinking_level_change 结尾的既有 che
     assert.deepEqual(archivedSourceBytes(sessionFile, manager.getSessionId()), firstCleanupBytes);
 });
 
-test("native compaction 请求使用独立 routing session ID 且禁用 prompt-cache 写入", async () => {
+test("/cleanup this 在源文件仅追加非上下文元数据后复用原生 LLM 结果", async (t) => {
+    const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-session-distill-native-reuse-"));
+    t.after(() => fs.rmSync(sessionDir, {recursive: true, force: true}));
+    const cwd = path.join(sessionDir, "project");
+    fs.mkdirSync(cwd);
+    const manager = SessionManager.create(cwd, sessionDir);
+    manager.appendMessage({role: "user", content: [{type: "text", text: "stable input"}], timestamp: 1});
+    manager.appendMessage({role: "assistant", content: [{type: "text", text: "stable result"}], timestamp: 2});
+    const sessionFile = manager.getSessionFile();
+    let modelCalls = 0;
+    const ctx = {
+        cwd,
+        mode: "print",
+        waitForIdle: async () => {},
+        sessionManager: {getSessionFile: () => sessionFile},
+        model: {provider: "test", id: "metadata-reuse-model"},
+        modelRegistry: {
+            async complete() {
+                modelCalls++;
+                if (modelCalls === 1) {
+                    fs.appendFileSync(sessionFile, `${JSON.stringify({
+                        type: "session_info",
+                        id: "metadata-title",
+                        parentId: manager.getLeafId(),
+                        timestamp: new Date().toISOString(),
+                        name: "Generated title",
+                    })}\n`);
+                }
+                return {content: [{type: "text", text: "cached-checkpoint"}], usage: {input: 1, output: 1, totalTokens: 2}};
+            },
+        },
+        ui: {notify() {}},
+    };
+
+    await assert.rejects(registeredCleanup().handler("this", ctx), /写入前发生变化/);
+    await registeredCleanup().handler("this", ctx);
+
+    assert.equal(modelCalls, 1);
+    assert.equal(SessionManager.open(sessionFile).buildContextEntries()[0].summary, "cached-checkpoint");
+});
+
+test("native compaction 请求使用独立 routing session ID、禁用 prompt-cache 写入并复用相同请求", async () => {
     const calls = [];
     const signal = new AbortController().signal;
     const ctx = {
@@ -362,11 +419,73 @@ test("native compaction 请求使用独立 routing session ID 且禁用 prompt-c
         signal,
     };
 
-    await generateNativeCompaction(event, ctx);
-    await generateNativeCompaction(event, ctx);
+    const first = await generateNativeCompaction(event, ctx);
+    const second = await generateNativeCompaction(event, ctx);
 
+    assert.equal(calls.length, 1);
     assert.equal(calls[0].cacheRetention, "none");
     assert.equal(calls[0].signal, signal);
     assert.match(calls[0].sessionId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    assert.equal(second.compaction.summary, first.compaction.summary);
+
+    removeNativeCompactionCheckpoint(second.checkpointKey);
+    const third = await generateNativeCompaction(event, ctx);
+    assert.equal(calls.length, 2);
     assert.notEqual(calls[0].sessionId, calls[1].sessionId);
+
+    const changed = await generateNativeCompaction({
+        ...event,
+        preparation: {
+            ...event.preparation,
+            messagesToSummarize: [{role: "user", content: [{type: "text", text: "different input"}]}],
+        },
+    }, ctx);
+    assert.equal(calls.length, 3);
+    const custom = await generateNativeCompaction({...event, customInstructions: "focus on verification"}, ctx);
+    assert.equal(calls.length, 4);
+    removeNativeCompactionCheckpoint(third.checkpointKey);
+    removeNativeCompactionCheckpoint(changed.checkpointKey);
+    removeNativeCompactionCheckpoint(custom.checkpointKey);
+});
+
+test("默认压缩失败时复用结果，session_compact 成功后删除 checkpoint", async () => {
+    const handlers = registeredLifecycleHandlers();
+    const beforeCompact = handlers.get("session_before_compact");
+    const compacted = handlers.get("session_compact");
+    assert.ok(beforeCompact);
+    assert.ok(compacted);
+    let modelCalls = 0;
+    const ctx = {
+        model: {provider: "test", id: "default-hook-cache-model"},
+        modelRegistry: {
+            async complete() {
+                modelCalls++;
+                return {
+                    content: [{type: "text", text: "hook-checkpoint"}],
+                    usage: {input: 1, output: 1, totalTokens: 2},
+                };
+            },
+        },
+        ui: {notify() {}},
+    };
+    const event = {
+        preparation: {
+            messagesToSummarize: [],
+            turnPrefixMessages: [],
+            firstKeptEntryId: "hook-kept",
+            tokensBefore: 200,
+            fileOps: {read: new Set(), written: new Set(), edited: new Set()},
+        },
+        signal: new AbortController().signal,
+    };
+
+    const first = await beforeCompact(event, ctx);
+    const retry = await beforeCompact(event, ctx);
+    assert.equal(modelCalls, 1);
+    assert.equal(retry.compaction.summary, first.compaction.summary);
+
+    await compacted({compactionEntry: retry.compaction}, ctx);
+    await beforeCompact(event, ctx);
+    assert.equal(modelCalls, 2);
+    await compacted({compactionEntry: retry.compaction}, ctx);
 });

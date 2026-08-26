@@ -69,6 +69,7 @@ import {
     generateNativeCompaction,
     isExpectedCompactionCancelled,
     NATIVE_COMPACTION_PROFILE,
+    removeNativeCompactionCheckpoint,
     serializeOfficialMessages,
     textualCapturePath,
 } from "./native-compaction.ts";
@@ -1766,7 +1767,7 @@ async function runNativeCompaction(
     const generated = await generateNativeCompaction({
         preparation: fullSpan,
         signal: new AbortController().signal,
-    }, ctx);
+    }, ctx, {logger});
     const compaction = generated?.compaction;
     if (!compaction?.summary?.trim()) throw new Error("当前会话 checkpoint 生成失败；源会话未修改");
     const lines = buildArchivedCompactionSessionLines({
@@ -1817,6 +1818,8 @@ async function runNativeCompaction(
     const successMessage = `当前会话已完成 full-span compaction；active context 仅保留 checkpoint，完整历史分支与 ${hiddenHistory.manifest.recordCount} 条 hidden archive 记录均已保存`;
     if (ctx.mode === "print") {
         writeReplacement();
+        removeNativeCompactionCheckpoint(generated.checkpointKey);
+        logger.write("native_compaction_checkpoint_removed", {checkpointKey: generated.checkpointKey});
         ctx.ui.notify(successMessage, "info");
         return;
     }
@@ -1831,6 +1834,8 @@ async function runNativeCompaction(
             ctx.sessionManager.branch(compactionId);
             const refreshed = await ctx.navigateTree(refreshedLeafId, {summarize: false});
             if (refreshed.cancelled) throw new Error("Pi Web 拒绝刷新 compaction 分支");
+            removeNativeCompactionCheckpoint(generated.checkpointKey);
+            logger.write("native_compaction_checkpoint_removed", {checkpointKey: generated.checkpointKey});
         } catch (error) {
             atomicReplace0600(sessionPath, originalBytes);
             ctx.sessionManager.setSessionFile(sessionPath);
@@ -1874,6 +1879,8 @@ async function runNativeCompaction(
                     logger.write("current_session_refresh_cancelled", {sessionPath, stagingPath});
                     stagingCtx.ui.notify(`checkpoint 已写入；自动返回原会话被取消，请手动重新打开：${sessionPath}`, "warning");
                 }
+                removeNativeCompactionCheckpoint(generated.checkpointKey);
+                logger.write("native_compaction_checkpoint_removed", {checkpointKey: generated.checkpointKey});
             },
         });
         if (staged.cancelled) throw new Error("当前会话刷新被取消；源会话未修改");
@@ -1963,7 +1970,7 @@ async function runSpecifiedNativeCompaction(command: CleanupCommandOptions, ctx:
     const generated = await generateNativeCompaction({
         preparation: fullSpan,
         signal: new AbortController().signal,
-    }, ctx);
+    }, ctx, {logger});
     const compaction = generated?.compaction;
     if (!compaction?.summary?.trim()) throw new Error("指定会话 checkpoint 生成失败；源会话未修改");
 
@@ -1997,6 +2004,8 @@ async function runSpecifiedNativeCompaction(command: CleanupCommandOptions, ctx:
         hiddenRecordCount: hiddenHistory.manifest.recordCount,
         snapshotDirectory: snapshot.directory,
     });
+    removeNativeCompactionCheckpoint(generated.checkpointKey);
+    logger.write("native_compaction_checkpoint_removed", {checkpointKey: generated.checkpointKey});
     ctx.ui.notify(`会话 ${candidate.id} 已完成 full-span cleanup；普通视图仅保留 checkpoint，完整历史已移入非 active 分支并保存 hidden archive`, "info");
 }
 
@@ -2604,6 +2613,8 @@ async function runSemanticCleanup(command: CleanupCommandOptions, ctx: Extension
 }
 
 export default function (pi: ExtensionAPI) {
+    let pendingNativeCompactionCheckpointKey: string | undefined;
+
     pi.on("session_start", async (_event: unknown, ctx: ExtensionCommandContext) => {
         try {
             await initializeDistillSettings(ctx);
@@ -2672,11 +2683,20 @@ export default function (pi: ExtensionAPI) {
             }
             return {cancel: true};
         }
+        pendingNativeCompactionCheckpointKey = undefined;
         try {
-            return await generateNativeCompaction(event, ctx);
+            const generated = await generateNativeCompaction(event, ctx);
+            if (!generated?.compaction) return undefined;
+            pendingNativeCompactionCheckpointKey = generated.checkpointKey;
+            return {compaction: generated.compaction};
         } catch (error) {
             if (!event.signal?.aborted) ctx.ui?.notify?.(`自定义 compaction checkpoint 失败，回退 Pi 原生摘要: ${safeError(error)}`, "warning");
             return undefined;
         }
+    });
+
+    pi.on("session_compact", async () => {
+        removeNativeCompactionCheckpoint(pendingNativeCompactionCheckpointKey);
+        pendingNativeCompactionCheckpointKey = undefined;
     });
 }

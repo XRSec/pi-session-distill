@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+## 4.5.4 — Native compaction request checkpoints
+
+- 为 `/cleanup this`、`/cleanup <单个 session-id>`、`/compact` 和自动压缩增加统一的原生 LLM 请求 checkpoint：按实际 system prompt、用户输入、模型与生成参数哈希复用结果；源 JSONL 仅追加标题等非上下文元数据时不再重复调用模型。
+- 原生压缩结果在 Pi 确认写入成功后删除，写入、刷新、网络或并发检查失败时保留在 `/tmp/session-distill-checkpoints/` 供重试。
+
 ## 4.5.3 — Pi Web cleanup refresh and model settings
 
 - 新增 `~/.pi/agent/pi-session-distill.json` 默认清洗模型设置；首次交互使用时从 Pi 可用模型列表选择，`/cleanup model` 可重新配置，配置模型不可用时回退当前会话模型。

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import {generateNativeCompaction} from "../native-compaction.ts";
+import {generateNativeCompaction, removeNativeCompactionCheckpoint} from "../native-compaction.ts";
 import {initializeDistillSettings, resolveDistillModel} from "../settings.ts";
 const {default: installExtension} = await import("../index.ts");
 
@@ -102,6 +102,14 @@ test("配置模型不可用时回退当前会话模型", (t) => {
 
 test("native compaction 优先调用配置模型", async (t) => {
     const configPath = withConfigPath(t);
+    const checkpointRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-session-distill-settings-checkpoint-"));
+    const previousCheckpointRoot = process.env.SESSION_DISTILL_CHECKPOINT_ROOT;
+    process.env.SESSION_DISTILL_CHECKPOINT_ROOT = checkpointRoot;
+    t.after(() => {
+        if (previousCheckpointRoot === undefined) delete process.env.SESSION_DISTILL_CHECKPOINT_ROOT;
+        else process.env.SESSION_DISTILL_CHECKPOINT_ROOT = previousCheckpointRoot;
+        fs.rmSync(checkpointRoot, {recursive: true, force: true});
+    });
     fs.writeFileSync(configPath, JSON.stringify({defaultLlmModel: {provider: "openai", id: "preferred"}}));
     let calledModel;
     const ctx = {
@@ -116,7 +124,7 @@ test("native compaction 优先调用配置模型", async (t) => {
         },
     };
 
-    await generateNativeCompaction({
+    const generated = await generateNativeCompaction({
         preparation: {
             messagesToSummarize: [],
             turnPrefixMessages: [],
@@ -128,4 +136,5 @@ test("native compaction 优先调用配置模型", async (t) => {
     }, ctx);
 
     assert.equal(calledModel, preferredModel);
+    removeNativeCompactionCheckpoint(generated.checkpointKey);
 });

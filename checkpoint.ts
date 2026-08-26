@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {atomicWrite0600} from "./core.ts";
 
-const CHECKPOINT_ROOT = process.env.SESSION_DISTILL_CHECKPOINT_ROOT || path.join("/tmp", "session-distill-checkpoints");
+function checkpointRoot(): string {
+    return process.env.SESSION_DISTILL_CHECKPOINT_ROOT || path.join("/tmp", "session-distill-checkpoints");
+}
 
 function sha256(value: string): string {
     return crypto.createHash("sha256").update(value).digest("hex");
@@ -45,9 +47,10 @@ export function openCleanupCheckpoint(options: {
         promptVersion: options.promptVersion,
     };
     const key = sha256(JSON.stringify(identity));
-    fs.mkdirSync(CHECKPOINT_ROOT, {recursive: true, mode: 0o700});
-    fs.chmodSync(CHECKPOINT_ROOT, 0o700);
-    const directory = path.join(CHECKPOINT_ROOT, key);
+    const root = checkpointRoot();
+    fs.mkdirSync(root, {recursive: true, mode: 0o700});
+    fs.chmodSync(root, 0o700);
+    const directory = path.join(root, key);
     fs.mkdirSync(directory, {recursive: true, mode: 0o700});
     fs.chmodSync(directory, 0o700);
     const statePath = path.join(directory, "state.json");
@@ -72,15 +75,15 @@ export function openCleanupCheckpoint(options: {
 
     const compatibleDirectories = (): Array<{ directory: string; key: string }> => {
         const result = [{directory, key}];
-        for (const entry of fs.readdirSync(CHECKPOINT_ROOT, {withFileTypes: true})) {
+        for (const entry of fs.readdirSync(root, {withFileTypes: true})) {
             if (!entry.isDirectory() || entry.name === key) continue;
             try {
-                const stored = JSON.parse(fs.readFileSync(path.join(CHECKPOINT_ROOT, entry.name, "state.json"), "utf8")) as {
+                const stored = JSON.parse(fs.readFileSync(path.join(root, entry.name, "state.json"), "utf8")) as {
                     key?: unknown;
                     identity?: { model?: unknown; promptVersion?: unknown }
                 };
                 if (stored.key !== entry.name || stored.identity?.model !== identity.model || stored.identity?.promptVersion !== identity.promptVersion) continue;
-                result.push({directory: path.join(CHECKPOINT_ROOT, entry.name), key: entry.name});
+                result.push({directory: path.join(root, entry.name), key: entry.name});
             } catch {
                 // Ignore unrelated or corrupt checkpoint directories.
             }

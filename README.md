@@ -6,7 +6,7 @@
 
 | 命令                       | 结果                                                           | 源会话处理                                                            |
 |----------------------------|----------------------------------------------------------------|-----------------------------------------------------------------------|
-| `/cleanup this`            | 原子重写当前会话：仅显示 checkpoint，并嵌入 hidden 完整历史    | 完整原始 JSONL 进入 hidden archive，另保留恢复快照                     |
+| `/cleanup this`            | 原子重写当前会话：仅显示 checkpoint，并嵌入 hidden 完整历史    | 完整原始 JSONL 进入 hidden archive，另保留恢复快照                    |
 | `/cleanup <session-id>`    | 在指定历史会话原地追加 native `CompactionEntry`                | 保留                                                                  |
 | `/cleanup <id> <id> [...]` | 生成并验证一个新的聚合 handoff session，并嵌入 hidden 完整历史 | 成功发布且源未变化后，移动到 `/tmp/session-distill-sources-<run-id>/` |
 | `/cleanup`                 | 交互选择并生成 handoff                                         | 始终保留                                                              |
@@ -115,8 +115,11 @@ TUI 中使用 (或先用 `--textual` 离线检查)。
 
 checkpoint key 由来源 snapshot SHA-256、模型和 prompt version 决定；每个 artifact 再核对阶段输入哈希。已经通过 schema
 校验且输入哈希完全相同的 fragment、consolidation、review 和 repair 可在同模型、同 prompt version 下跨 append-only snapshot
-变化复用。checkpoint 和 artifact 权限分别为 `0700`/`0600`，成功发布且来源移动完成后自动删除；失败时保留用于继续。来源移动
-manifest 使用原子 `0600` 替换更新，完成后冻结快照自动删除。
+变化复用。
+
+原生 compaction 入口（`/cleanup this`、`/cleanup <单个 session-id>`、`/compact`、自动压缩）还会对实际发送给清洗模型的 system prompt、用户文本、模型和生成参数计算请求哈希。标题、浏览器状态等不会改变 Pi compaction 输入的元数据即使导致源 JSONL 字节变化，重试时也会直接复用已经校验的 LLM 结果；消息或压缩指令变化则生成不同哈希并重新调用模型。
+
+checkpoint 和 artifact 权限分别为 `0700`/`0600`。原生 compaction 在 Pi 确认写入成功后删除对应 checkpoint，失败时保留；多会话 handoff 在成功发布且来源移动完成后删除，失败时保留用于继续。来源移动 manifest 使用原子 `0600` 替换更新，完成后冻结快照自动删除。
 
 ## 安装
 
