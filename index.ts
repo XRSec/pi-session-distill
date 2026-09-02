@@ -104,7 +104,7 @@ const MODEL_TIMEOUT_MS = 300_000;
 const MODEL_TRANSIENT_RETRIES = 2;
 const BACKUP_ROOT = process.env.SESSION_DISTILL_BACKUP_ROOT || path.join("/tmp", "session-distill-backups");
 const LOG_ROOT = path.join("/tmp", "session-distill-logs");
-const CLEANER_VERSION = "4.5.1";
+const CLEANER_VERSION = "4.5.5";
 const HANDOFF_PROMPT_VERSION = "handoff-result-first-v1.2.1";
 const HANDOFF_CORE_NORMALIZATION_VERSION = "core-normalization-v2";
 const MAX_HANDOFF_REPAIRS = 5;
@@ -1935,7 +1935,8 @@ async function runSpecifiedNativeCompaction(command: CleanupCommandOptions, ctx:
     if (!resolveDistillModel(ctx)) throw new Error("指定会话 full-span cleanup 需要可用模型");
     const candidate = candidates[0];
     const activeFile = ctx.sessionManager.getSessionFile();
-    if (activeFile && fs.realpathSync(activeFile) === fs.realpathSync(candidate.path)) {
+    const activeRealPath = activeFile && fs.existsSync(activeFile) ? fs.realpathSync(activeFile) : undefined;
+    if (activeRealPath && activeRealPath === fs.realpathSync(candidate.path)) {
         throw new Error("当前会话请使用 /cleanup this");
     }
 
@@ -2074,7 +2075,10 @@ async function runHandoffCleanup(command: CleanupCommandOptions, ctx: ExtensionC
     const archiveExplicitSources = command.sourceTokens.length > 1;
     if (archiveExplicitSources && candidates.length < 2) throw new Error("多个明确 session ID 必须解析为至少两个不同源会话");
     const activeSessionPath = ctx.sessionManager.getSessionFile();
-    if (archiveExplicitSources && activeSessionPath && candidates.some((candidate) => fs.realpathSync(candidate.path) === fs.realpathSync(activeSessionPath))) {
+    const activeRealPath = activeSessionPath && fs.existsSync(activeSessionPath)
+        ? fs.realpathSync(activeSessionPath)
+        : undefined;
+    if (archiveExplicitSources && activeRealPath && candidates.some((candidate) => fs.realpathSync(candidate.path) === activeRealPath)) {
         throw new Error("多个明确 session ID 不得包含当前活动会话");
     }
     logger.write("source_mode", {hasUI: ctx.hasUI, mode: ctx.mode, archiveExplicitSources});

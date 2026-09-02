@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 4.5.5 — Safe active session path resolution
+
+- 修复当当前活动会话尚未在磁盘上创建实际文件时（如在新建会话中直接执行 `/cleanup <ids>`），多会话 handoff 和单指定会话 native compaction 对 `activeSessionPath` 直接调用 `fs.realpathSync` 触发 `ENOENT: no such file or directory, lstat ...` 的问题。
+- 新增未落盘活动会话环境下的多会话和指定会话 cleanup 安全执行回归测试。
+
 ## 4.5.4 — Native compaction request checkpoints
 
 - 为 `/cleanup this`、`/cleanup <单个 session-id>`、`/compact` 和自动压缩增加统一的原生 LLM 请求 checkpoint：按实际 system prompt、用户输入、模型与生成参数哈希复用结果；源 JSONL 仅追加标题等非上下文元数据时不再重复调用模型。

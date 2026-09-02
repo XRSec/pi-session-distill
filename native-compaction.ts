@@ -191,7 +191,7 @@ export async function generateNativeCompaction(
 ): Promise<any> {
     const preparation = event.preparation;
     const model = resolveDistillModel(ctx);
-    if (!model) return undefined;
+    if (!model) throw new Error("未找到可用于 native compaction 的模型");
     const baseInput = buildNativeCompactionPromptInput(preparation);
     const customInstructions = safeSourceText(event.customInstructions ?? "").trim();
     const input = customInstructions
@@ -239,7 +239,23 @@ export async function generateNativeCompaction(
             },
         );
         const summary = safeSourceText(responseText(response));
-        if (!summary.trim()) return undefined;
+        const stopReason = safeSourceText(response?.stopReason).trim();
+        const errorMessage = safeSourceText(response?.errorMessage).trim();
+        options.logger?.write("native_compaction_model_response", {
+            checkpointKey: checkpoint.key,
+            inputHash: request.hash,
+            stopReason: stopReason || "unknown",
+            outputChars: summary.length,
+            ...(errorMessage ? {errorMessage} : {}),
+        });
+        if (!summary.trim()) {
+            const detail = errorMessage
+                ? `: ${errorMessage}`
+                : stopReason
+                    ? `（stopReason: ${stopReason}）`
+                    : "（模型返回空文本）";
+            throw new Error(`native compaction 模型未生成 checkpoint${detail}`);
+        }
         cached = {summary, usage: response.usage};
         checkpoint.write("native-result", request.hash, cached);
         options.logger?.write("native_compaction_checkpoint_written", {

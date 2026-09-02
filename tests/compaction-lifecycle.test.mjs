@@ -448,6 +448,49 @@ test("native compaction 请求使用独立 routing session ID、禁用 prompt-ca
     removeNativeCompactionCheckpoint(custom.checkpointKey);
 });
 
+test("native compaction 空响应保留模型错误并写入诊断日志", async () => {
+    const events = [];
+    const ctx = {
+        model: {provider: "test", id: "empty-response-model"},
+        modelRegistry: {
+            async complete() {
+                return {
+                    content: [],
+                    stopReason: "error",
+                    errorMessage: "request body too large",
+                };
+            },
+        },
+    };
+    const event = {
+        preparation: {
+            messagesToSummarize: [{role: "user", content: [{type: "text", text: "unique empty response input"}]}],
+            turnPrefixMessages: [],
+            firstKeptEntryId: "kept",
+            tokensBefore: 100,
+            fileOps: {read: new Set(), written: new Set(), edited: new Set()},
+        },
+        signal: new AbortController().signal,
+    };
+
+    try {
+        await assert.rejects(
+            generateNativeCompaction(event, ctx, {logger: {write: (name, data) => events.push({name, data})}}),
+            /native compaction 模型未生成 checkpoint: request body too large/,
+        );
+        const responseEvent = events.find(({name}) => name === "native_compaction_model_response");
+        assert.deepEqual(responseEvent?.data, {
+            checkpointKey: events.find(({name}) => name === "native_compaction_checkpoint_ready").data.checkpointKey,
+            inputHash: events.find(({name}) => name === "native_compaction_checkpoint_ready").data.inputHash,
+            stopReason: "error",
+            outputChars: 0,
+            errorMessage: "request body too large",
+        });
+    } finally {
+        removeNativeCompactionCheckpoint(events.find(({name}) => name === "native_compaction_checkpoint_ready")?.data.checkpointKey);
+    }
+});
+
 test("默认压缩失败时复用结果，session_compact 成功后删除 checkpoint", async () => {
     const handlers = registeredLifecycleHandlers();
     const beforeCompact = handlers.get("session_before_compact");
@@ -489,3 +532,71 @@ test("默认压缩失败时复用结果，session_compact 成功后删除 checkp
     assert.equal(modelCalls, 2);
     await compacted({compactionEntry: retry.compaction}, ctx);
 });
+
+test("当当前活动会话尚未在磁盘落盘时，多会话和指定会话 cleanup 不会因 realpathSync 抛出 ENOENT", async (t) => {
+    const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-session-distill-noent-test-"));
+    t.after(() => fs.rmSync(sessionDir, {recursive: true, force: true}));
+    const cwd = path.join(sessionDir, "project");
+    fs.mkdirSync(cwd);
+
+    // 创建两个已持久化的历史会话
+    const s1 = SessionManager.create(cwd, sessionDir);
+    s1.appendMessage({role: "user", content: [{type: "text", text: "session 1 user"}], timestamp: 1});
+    s1.appendMessage({role: "assistant", content: [{type: "text", text: "session 1 assistant"}], timestamp: 2});
+    const s1Id = s1.getSessionId();
+
+    const s2 = SessionManager.create(cwd, sessionDir);
+    s2.appendMessage({role: "user", content: [{type: "text", text: "session 2 user"}], timestamp: 3});
+    s2.appendMessage({role: "assistant", content: [{type: "text", text: "session 2 assistant"}], timestamp: 4});
+    const s2Id = s2.getSessionId();
+
+    const cleanup = registeredCleanup();
+    const nonExistentActiveFile = path.join(sessionDir, "2026-09-02T10-26-41-625Z_01a061a8-1959-7796-b9b8-e403b506f2b7.jsonl");
+    assert.equal(fs.existsSync(nonExistentActiveFile), false);
+
+    const mockCtx = {
+        cwd,
+        hasUI: false,
+        mode: "print",
+        model: {provider: "test", id: "mock-model"},
+        modelRegistry: {
+            async complete() {
+                return {
+                    content: [{type: "text", text: "checkpoint summary"}],
+                    usage: {input: 10, output: 10, totalTokens: 20},
+                };
+            },
+        },
+        sessionManager: {
+            getSessionId: () => "01a061a8-1959-7796-b9b8-e403b506f2b7",
+            getSessionFile: () => nonExistentActiveFile,
+            getCwd: () => cwd,
+            getHeader: () => null,
+            getSessionName: () => undefined,
+        },
+        ui: {
+            notify() {},
+        },
+        waitForIdle: async () => {},
+    };
+
+    const origListAll = SessionManager.listAll;
+    SessionManager.listAll = async () => [
+        {path: s1.getSessionFile(), id: s1Id, cwd, name: "s1", created: new Date()},
+        {path: s2.getSessionFile(), id: s2Id, cwd, name: "s2", created: new Date()},
+    ];
+    t.after(() => {
+        SessionManager.listAll = origListAll;
+    });
+
+    // 验证多会话 textual cleanup 不会因 active session 尚未在磁盘落盘而抛出 ENOENT
+    await assert.doesNotReject(async () => {
+        await cleanup.handler(`--textual ${s1Id} ${s2Id}`, mockCtx);
+    });
+
+    // 验证指定会话 native compaction 不会因 active session 尚未在磁盘落盘而抛出 ENOENT
+    await assert.doesNotReject(async () => {
+        await cleanup.handler(s1Id, mockCtx);
+    });
+});
+
