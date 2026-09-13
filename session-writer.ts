@@ -167,15 +167,20 @@ function verifyMergedSourceBranches(
     const markers = lines.filter((line) => line.type === "custom_message" && line.customType === "cleanup_source_root" && line.parentId === rootId);
     if (markers.length !== history.manifest.sourceCount) throw new Error("写后验证失败: 来源分支数量不一致");
     if (markers.some((line) => line.display !== false)) throw new Error("写后验证失败: 来源分支入口必须在普通视图隐藏");
-    const summaryIndex = lines.findIndex((line) => line.type === "compaction" && line.parentId === rootId
+    const summaryIndex = lines.findIndex((line) => line.type === "compaction"
+        && (line.parentId === rootId || lines.find((m) => m.id === line.parentId)?.parentId === rootId)
         && (line.details as Record<string, unknown> | undefined)?.schema === summarySchema);
     if (summaryIndex < 0) throw new Error("写后验证失败: 聚合摘要不在 active 根分支");
+    const compactionEntry = lines[summaryIndex];
+    const boundaryIndex = compactionEntry.parentId === rootId
+        ? summaryIndex
+        : lines.findIndex((line) => line.id === compactionEntry.parentId);
 
     for (const source of [...history.manifest.sources].sort((left, right) => left.sourceIndex - right.sourceIndex)) {
         const markerIndex = lines.findIndex((line) => line.type === "custom_message" && line.customType === "cleanup_source_root" && line.parentId === rootId && (line.details as Record<string, unknown> | undefined)?.sourceId === source.sourceId);
         if (markerIndex < 0) throw new Error(`写后验证失败: 缺少来源分支 ${source.sourceId}`);
-        const nextBoundary = lines.findIndex((line, index) => index > markerIndex && ((line.type === "custom_message" && line.customType === "cleanup_source_root" && line.parentId === rootId) || index === summaryIndex));
-        const imported = lines.slice(markerIndex + 1, nextBoundary < 0 ? summaryIndex : nextBoundary);
+        const nextBoundary = lines.findIndex((line, index) => index > markerIndex && ((line.type === "custom_message" && line.customType === "cleanup_source_root" && line.parentId === rootId) || index === boundaryIndex));
+        const imported = lines.slice(markerIndex + 1, nextBoundary < 0 ? boundaryIndex : nextBoundary);
         const original = parseHistorySourceEntries(history, source.sourceId).entries;
         if (imported.length !== original.length) throw new Error(`写后验证失败: 来源分支 entry 数量不一致 (${source.sourceId})`);
         const idMap = new Map<string, string>();
@@ -439,11 +444,23 @@ export function buildArchivedCompactionSessionLines(options: {
     appendMergedSourceBranches(lines, rootId, timestamp, options.history);
     const compactTime = new Date(timestamp).toISOString().slice(5, 16).replace("T", " ").replace("-", "/");
     const branchLabel = `PSD ${options.compactionTrigger === "automatic" ? "A" : "M"} ${compactTime}`;
+    const markerId = entryId();
+    lines.push({
+        type: "message",
+        id: markerId,
+        parentId: rootId,
+        timestamp,
+        message: {
+            role: "user",
+            content: [{type: "text", text: branchLabel}],
+            timestamp: Date.parse(timestamp) || Date.now(),
+        },
+    });
     const compactionId = entryId();
     lines.push({
         type: "compaction",
         id: compactionId,
-        parentId: rootId,
+        parentId: markerId,
         timestamp,
         summary: options.summary,
         firstKeptEntryId: compactionId,
@@ -484,7 +501,11 @@ export function verifyArchivedCompactionSessionLines(
     if (roots.length !== 1 || typeof roots[0].id !== "string") {
         throw new Error("写后验证失败: archived compaction merge root 无效");
     }
-    const compactions = lines.filter((line) => line.type === "compaction" && line.parentId === roots[0].id
+    const marker = lines.find((line) => line.type === "message" && line.parentId === roots[0].id);
+    if (!marker || typeof marker.id !== "string") {
+        throw new Error("写后验证失败: archived compaction marker 无效");
+    }
+    const compactions = lines.filter((line) => line.type === "compaction" && line.parentId === marker.id
         && (line.details as Record<string, unknown> | undefined)?.schema === "session-distill-archived-compaction/v1");
     const compactionDetails = compactions[0]?.details as Record<string, unknown> | undefined;
     if (compactions.length !== 1 || compactions[0].summary !== expectedSummary
@@ -501,7 +522,7 @@ export function verifyArchivedCompactionSessionLines(
     if (!history) throw new Error("写后验证失败: archived compaction 缺少 hidden history");
     verifyMergedSourceBranches(lines, history, "session-distill-archived-compaction/v1");
     verifyHiddenHistorySessionLines(activeLines, expectedArchiveId);
-    if (path[1]?.id !== compactions[0].id || path.some((entry) => entry.type === "message" || entry.type === "custom_message")) {
+    if (path[2]?.id !== compactions[0].id || path.slice(3).some((entry) => entry.type === "message" || entry.type === "custom_message")) {
         throw new Error("写后验证失败: archived compaction active path 无效");
     }
 }
@@ -516,6 +537,7 @@ export function buildHandoffSessionLines(options: {
     report: AgentHandoffReport;
     history?: HiddenHistoryArchive;
     timestamp?: string;
+    compactionTrigger?: "manual" | "automatic";
 }): Array<Record<string, unknown>> {
     const timestamp = options.timestamp ?? new Date().toISOString();
     const header = {type: "session", version: 3, id: options.sessionId, timestamp, cwd: options.cwd};
@@ -534,11 +556,29 @@ export function buildHandoffSessionLines(options: {
         appendMergedSourceBranches(lines, rootId, timestamp, options.history);
         activeParentId = rootId;
     }
+    const compactTime = new Date(timestamp).toISOString().slice(5, 16).replace("T", " ").replace("-", "/");
+    const trigger = options.compactionTrigger ?? "manual";
+    const branchLabel = `PSD ${trigger === "automatic" ? "A" : "M"} ${compactTime}`;
+    let markerId: string | null = null;
+    if (activeParentId) {
+        markerId = entryId();
+        lines.push({
+            type: "message",
+            id: markerId,
+            parentId: activeParentId,
+            timestamp,
+            message: {
+                role: "user",
+                content: [{type: "text", text: branchLabel}],
+                timestamp: Date.parse(timestamp) || Date.now(),
+            },
+        });
+    }
     const bodyId = entryId();
     lines.push({
         type: "compaction",
         id: bodyId,
-        parentId: activeParentId,
+        parentId: markerId ?? activeParentId,
         timestamp,
         summary: options.body,
         firstKeptEntryId: bodyId,
@@ -548,6 +588,9 @@ export function buildHandoffSessionLines(options: {
             schema: "agent-handoff-markdown/v1",
             reportId: options.report.reportId,
             normalizedContentHash: options.report.quality.normalizedContentHash,
+            branchLabel,
+            compactionTrigger: trigger,
+            compactionTimestamp: timestamp,
         },
     });
     const infoId = entryId();
@@ -600,6 +643,10 @@ export function verifyHandoffSessionLines(
     const bodyEntry = bodyEntries[0];
     if (bodyEntry.summary !== expectedBody) throw new Error("写后验证失败: handoff body 不一致");
     if (bodyEntry.firstKeptEntryId !== bodyEntry.id) throw new Error("写后验证失败: handoff compaction 必须是自包含 checkpoint");
+    const details = bodyEntry.details as Record<string, unknown> | undefined;
+    if (!/^PSD [MA] \d{2}\/\d{2} \d{2}:\d{2}$/.test(String(details?.branchLabel ?? ""))) {
+        throw new Error(`写后验证失败: handoff compaction 缺少合法的 branchLabel (${String(details?.branchLabel)})`);
+    }
     if (activeEntries.filter((line) => line.type === "custom" && line.customType === "cleanup_manifest").length !== 1) throw new Error("写后验证失败: active cleanup_manifest 必须恰好一次");
     const reports = activeEntries.filter((line) => line.type === "custom" && line.customType === "cleanup_handoff");
     if (reports.length !== 1) throw new Error("写后验证失败: active cleanup_handoff 必须恰好一次");

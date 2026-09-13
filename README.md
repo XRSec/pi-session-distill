@@ -40,6 +40,8 @@ LLM handoff 的主题，不使用文件系统项目路径。原始 JSONL 字节�
 /cleanup model
 ```
 
+使用自定义 `PI_CODING_AGENT_DIR` 或 `--session-dir` 时，历史会话发现会同时扫描当前 session 目录和 Pi 全局目录。扩展配置默认跟随 `PI_CODING_AGENT_DIR/pi-session-distill.json`，也可以用 `SESSION_DISTILL_CONFIG_PATH` 覆盖。
+
 ## 接管 Pi 压缩事件
 
 扩展加载后会自动注册 Pi 的 `session_before_compact` hook，点击压缩、执行 `/compact` 或触发自动压缩时都会由

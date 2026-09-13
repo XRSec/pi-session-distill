@@ -1,10 +1,18 @@
 # Changelog
 
-## Unreleased
+## 4.5.6 — Pi Web branch preview anchor, user intent recall and native compaction v4
 
-## 4.5.5 — Safe active session path resolution
+- 修复 Pi Web 分支面板显示 `custom`：在 session-writer 的 `merge_root` 与 `compaction` entry 之间插入 `{ type: "message", role: "user", content: "PSD M/A MM/DD HH:mm" }` 锚点，使 Pi Web 能提取到可读的分支标签；因 `firstKeptEntryId === compaction.id`，Pi 上下文截断线依然在 compaction 节点，marker 节点不进入 LLM 上下文。
+- 提升高复杂度会话的语义保真：handoff 预筛选由仅保留 Assistant terminal result 改为同时保留每轮 substantive User intent/constraints，避免用户硬约束、纠正、停止条件和验收口径在模型调用前被丢弃；handoff prompt version 更新为 `handoff-intent-result-v1.3.0`。
+- native compaction prompt 更新为 `native-compaction-request-v4`：增加 USER-CONTRACT / RESOLVED-STATE / RESUME-RISK 三次静默检查，保留可防止重复工作的关键已验证结果与失败坑，并将固定极短字数/每节 2 bullet 限制改为按复杂度弹性预算。
+- 多会话 / 自定义 session 目录扫描：支持包含 `--session-dir` 自定义目录的会话发现与去重；`/cleanup model <provider/id>` 支持直接通过命令行设置默认模型。
+- 移除 Paseo 适配：取消对 Paseo RPC bridge、Paseo 专用写入路径、`preserveHostSession` 及 Paseo 历史 entry 保留/刷新逻辑的特殊处理。
+- 新增 completed/unfinished turn 的用户约束召回回归测试，同时继续过滤“继续”等低价值 continuation 文本。
+
+## 4.5.5 — Safe active session path resolution and timeout retry
 
 - 修复当当前活动会话尚未在磁盘上创建实际文件时（如在新建会话中直接执行 `/cleanup <ids>`），多会话 handoff 和单指定会话 native compaction 对 `activeSessionPath` 直接调用 `fs.realpathSync` 触发 `ENOENT: no such file or directory, lstat ...` 的问题。
+- 为 handoff/semantic 清洗的模型调用层增加对 `Request timed out` / `timeout` 瞬态网络/上游错误的重试捕获。
 - 新增未落盘活动会话环境下的多会话和指定会话 cleanup 安全执行回归测试。
 
 ## 4.5.4 — Native compaction request checkpoints

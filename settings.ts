@@ -1,14 +1,14 @@
 // @ts-nocheck
-import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import {atomicReplace0600} from "./core.ts";
+import {getAgentDir} from "@earendil-works/pi-coding-agent";
 
 type ModelRef = {provider: string; id: string};
 type DistillConfig = {defaultLlmModel?: ModelRef};
 
 export function distillConfigPath(): string {
-    return process.env.SESSION_DISTILL_CONFIG_PATH || path.join(os.homedir(), ".pi", "agent", "pi-session-distill.json");
+    return process.env.SESSION_DISTILL_CONFIG_PATH || path.join(getAgentDir(), "pi-session-distill.json");
 }
 
 export function readDistillConfig(): DistillConfig {
@@ -30,12 +30,13 @@ export function readDistillConfig(): DistillConfig {
 }
 
 export async function initializeDistillSettings(ctx: any): Promise<void> {
-    if (readDistillConfig().defaultLlmModel || !ctx.hasUI) return;
+    // RPC startup must finish before a host can send prompts or answer dialogs.
+    if (readDistillConfig().defaultLlmModel || !ctx.hasUI || ctx.mode === "rpc") return;
     await configureDistillModel(ctx);
 }
 
-export async function configureDistillModel(ctx: any): Promise<void> {
-    if (!ctx.hasUI) throw new Error("/cleanup model 需要交互式 UI");
+export async function configureDistillModel(ctx: any, modelKey?: string): Promise<void> {
+    if (!modelKey && !ctx.hasUI) throw new Error("请使用 /cleanup model <provider/model-id> 设置默认模型");
 
     const models = ctx.modelRegistry.getAvailable()
         .slice()
@@ -49,10 +50,15 @@ export async function configureDistillModel(ctx: any): Promise<void> {
         const key = `${model.provider}/${model.id}`;
         return model.name && model.name !== model.id ? `${key} — ${model.name}` : key;
     });
-    const selected = await ctx.ui.select("Default LLM Model", labels);
-    if (!selected) return;
-
-    const model = models[labels.indexOf(selected)];
+    let model;
+    if (modelKey) {
+        model = models.find((candidate) => `${candidate.provider}/${candidate.id}` === modelKey);
+        if (!model) throw new Error(`默认模型不可用: ${modelKey}；请指定 Pi 可用列表中的 provider/model-id`);
+    } else {
+        const selected = await ctx.ui.select("Default LLM Model", labels);
+        if (!selected) return;
+        model = models[labels.indexOf(selected)];
+    }
     if (!model) return;
     atomicReplace0600(distillConfigPath(), `${JSON.stringify({
         defaultLlmModel: {provider: model.provider, id: model.id},

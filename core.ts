@@ -418,21 +418,15 @@ function terminalAssistantResult(activity: unknown[]): unknown | undefined {
     return undefined;
 }
 
-function selectedEvidenceIsSelfDescribing(assistants: unknown[], tools: unknown[]): boolean {
-    const assistantText = assistants.map(messageContentText).filter(Boolean).join("\n");
-    if (assistantText && assistantText.length >= 80) return true;
-    if (assistantText && /(根因|原因|已完成|已修复|已解决|恢复|验证|测试|通过|成功|失败|当前状态|剩余|未解决|阻塞|决定|必须|不得)/i.test(assistantText)) return true;
-    const toolText = tools.map(messageContentText).join("\n");
-    return toolText.length >= 180 && toolEvidenceSignal(toolText, tools.some(toolResultIsError)) >= 60;
-}
-
 /**
  * Build a high-information cleanup input from conversation turns.
  *
- * Default path: only the terminal, substantive assistant result for each user turn.
- * Fallback path (interrupted/incomplete turn): latest substantive assistant status + a small
- * set of result-bearing tool outputs. User text is included only when those results cannot
- * explain the turn by themselves. Low-value turns such as "继续" with no result are dropped.
+ * Default path: pair each terminal, substantive assistant result with the turn's substantive
+ * User intent/constraints. Assistant results are not a reliable substitute for exact user
+ * requirements, corrections, prohibitions, or acceptance criteria.
+ * Fallback path (interrupted/incomplete turn): keep substantive User intent plus durable
+ * assistant milestones and a small set of result-bearing tool outputs. Low-value turns such as
+ * "继续" with no durable intent are still dropped.
  */
 function assistantStopReason(message: unknown): string | undefined {
     if (!message || typeof message !== "object" || Array.isArray(message)) return undefined;
@@ -503,6 +497,7 @@ export function selectResultFirstRecords(messages: unknown[]): ResultFirstSelect
     for (const [turnOffset, turn] of turns.entries()) {
         const turnIndex = turnOffset + 1;
         const terminal = terminalAssistantResult(turn.activity);
+        const usefulUsers = turn.userMessages.filter((message) => !isLowValueUserText(messageContentText(message)));
         if (terminal) {
             records.push({
                 turnIndex,
@@ -511,7 +506,7 @@ export function selectResultFirstRecords(messages: unknown[]): ResultFirstSelect
                 assistantMessages: [terminal],
                 assistantIsFinal: true,
                 toolResults: [],
-                userMessages: [],
+                userMessages: usefulUsers,
                 rawMessageCount: turn.userMessages.length + turn.activity.length,
             });
             continue;
@@ -520,9 +515,7 @@ export function selectResultFirstRecords(messages: unknown[]): ResultFirstSelect
         const assistantMessages = selectAssistantFallbacks(turn.activity);
         const assistant = assistantMessages.at(-1) ?? latestSubstantiveAssistant(turn.activity);
         const toolResults = selectToolFallbacks(turn.activity);
-        const selfDescribing = selectedEvidenceIsSelfDescribing(assistantMessages.length ? assistantMessages : assistant ? [assistant] : [], toolResults);
-        const usefulUsers = turn.userMessages.filter((message) => !isLowValueUserText(messageContentText(message)));
-        const userMessages = selfDescribing ? [] : usefulUsers;
+        const userMessages = usefulUsers;
 
         if (assistant || toolResults.length > 0) {
             records.push({

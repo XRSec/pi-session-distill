@@ -189,11 +189,13 @@ test("handoff session 以 hidden custom entries 持久化并回读完整历史",
         assert.equal(sourceRoots.length, 2);
         assert.ok(sourceRoots.every((line) => line.display === false));
         const handoff = lines.find((line) => line.type === "compaction" && line.details?.reportId === "report-test");
-        assert.equal(handoff?.parentId, mergeRoot.id);
+        const marker = lines.find((line) => line.type === "message" && line.parentId === mergeRoot.id);
+        assert.ok(marker);
+        assert.equal(handoff?.parentId, marker.id);
         assert.equal(handoff?.summary, "Visible handoff");
         assert.equal(handoff?.firstKeptEntryId, handoff?.id);
         assert.equal(handoff?.fromHook, true);
-        assert.equal(lines.filter((line) => line.type === "message").length, 6);
+        assert.equal(lines.filter((line) => line.type === "message").length, 7);
     } finally {
         rmSync(directory, {recursive: true, force: true});
     }

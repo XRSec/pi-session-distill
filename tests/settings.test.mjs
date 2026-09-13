@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {generateNativeCompaction, removeNativeCompactionCheckpoint} from "../native-compaction.ts";
-import {initializeDistillSettings, resolveDistillModel} from "../settings.ts";
+import {configureDistillModel, distillConfigPath, initializeDistillSettings, resolveDistillModel} from "../settings.ts";
 const {default: installExtension} = await import("../index.ts");
 
 function withConfigPath(t) {
@@ -22,6 +22,34 @@ function withConfigPath(t) {
 
 const currentModel = {provider: "current", id: "session-model"};
 const preferredModel = {provider: "openai", id: "preferred", name: "Preferred"};
+
+test("RPC 首次启动不等待选择框；可直接设置包含斜杠的模型 ID", async (t) => {
+    const configPath = withConfigPath(t);
+    const ctx = {
+        mode: "rpc", hasUI: true,
+        modelRegistry: {getAvailable: () => [{provider: "proxy", id: "vendor/model"}]},
+        ui: {select() { assert.fail("RPC startup must not block on UI"); }, notify() {}},
+    };
+    await initializeDistillSettings(ctx);
+    assert.equal(fs.existsSync(configPath), false);
+    await configureDistillModel(ctx, "proxy/vendor/model");
+    assert.deepEqual(JSON.parse(fs.readFileSync(configPath)), {defaultLlmModel: {provider: "proxy", id: "vendor/model"}});
+    await assert.rejects(configureDistillModel(ctx, "unknown/model"), /默认模型不可用/);
+    assert.equal(JSON.parse(fs.readFileSync(configPath)).defaultLlmModel.id, "vendor/model");
+});
+
+test("配置遵循 PI_CODING_AGENT_DIR，显式 distill 路径仍优先", (t) => {
+    const configured = withConfigPath(t);
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    t.after(() => {
+        if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previous;
+    });
+    process.env.PI_CODING_AGENT_DIR = path.dirname(configured);
+    assert.equal(distillConfigPath(), configured);
+    delete process.env.SESSION_DISTILL_CONFIG_PATH;
+    assert.equal(distillConfigPath(), path.join(path.dirname(configured), "pi-session-distill.json"));
+});
 
 test("首次使用从 Pi 可用模型中选择并写入 0600 配置", async (t) => {
     const configPath = withConfigPath(t);
