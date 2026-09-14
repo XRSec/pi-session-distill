@@ -21,6 +21,28 @@ LLM handoff 的主题，不使用文件系统项目路径。原始 JSONL 字节�
 保存并建立跨来源时间线索引。只有质量门禁、树结构、hidden history、原子写入、回读以及全部源文件一致性检查都通过后，才会把来源临时移动到
 `/tmp/session-distill-sources-<run-id>/`。失败时不发布无效结果，也不移动来源。
 
+## Pi Web 分支标签与上下文隔离
+
+在 Pi Web 界面中，分支切换面板（Branch Selector）默认只从 `type: "message"` 节点提取分支文本预览（前 40 字符）；如果分支入口不存在 message 节点，Pi Web 会直接回退显示节点类型名 `custom`。
+
+为在不修改 Pi Web 源码的前提下提供清晰可辨的分支名，`session-distill` 在构建压缩分支时，于 `cleanup_merge_root` 与 `compaction` 节点之间注入一个轻量的标签锚点：
+```json
+{
+  "type": "message",
+  "parentId": "<rootId>",
+  "message": {
+    "role": "user",
+    "content": [{"type": "text", "text": "PSD M 09/14 10:39"}]
+  }
+}
+```
+`compaction` 节点的 `parentId` 改为指向此锚点。
+
+### 上下文绝对隔离保证
+- **大模型不感知**：`compaction.firstKeptEntryId === compaction.id`。Pi 官方的 `buildContextEntries()` 在遇到自包含 checkpoint 时，会强制截断此前所有历史节点（包括该 message 锚点、之前的历史消息与 merge root）。发送给大模型的有效上下文中只有单一的 `compactionSummary`，锚点**100% 隔离，绝不进入 LLM 上下文**。
+- **分支面板直观**：Pi Web 分支列表正常显示 `U PSD M MM/DD HH:mm`（手动提炼）或 `PSD A MM/DD HH:mm`（自动压缩）。
+- **“完整历史”页面的 `custom` 节点说明**：点击 Pi Web 的“完整历史”时打开的是 Pi 官方 `pi --export` 单页 HTML。在该页面的完整树中，该锚点会如实显示为 `user: PSD ...`；而挂在 compaction 节点之后的几个 `[custom]` 标签，是 Pi 官方导出模板对用于无损恢复的 `cleanup_history_manifest`、`cleanup_history_source_chunk` 等非对话扩展数据包的通用显示，属于正常的底层存储结构展示。
+
 ## 默认清洗模型
 
 首次启动时，扩展读取 `~/.pi/agent/pi-session-distill.json`。文件不存在、为空或尚未设置 `defaultLlmModel` 时，会从 Pi 当前可用模型列表弹出 **Default LLM Model** 选择框，并以 `0600` 权限保存：

@@ -33,7 +33,7 @@
 
 ## 单会话原地 Compaction
 
-1. `/cleanup this` 必须在冻结副本上使用 Pi 官方 `prepareCompaction` 并将 `keepRecentTokens` 设为 `0`；压缩前的整个有效会话（既有 checkpoint + 当前原始后缀）必须全部进入提炼输入。写入时原子重建同一 session：`cleanup_merge_root` 下 active 分支的 `CompactionEntry` 是唯一可见模型消息，原 session entry tree 必须复制到 `cleanup_source_root` sibling 非 active 分支，原 JSONL 精确字节还必须进入 `cleanup_history_manifest`、`cleanup_history_source_chunk`、`cleanup_history_timeline_chunk` hidden entries。其他自动或手动压缩继续通过 `session_before_compact` 使用 Pi 当前 compaction settings。
+1. `/cleanup this` 必须在冻结副本上使用 Pi 官方 `prepareCompaction` 并将 `keepRecentTokens` 设为 `0`；压缩前的整个有效会话（既有 checkpoint + 当前原始后缀）必须全部进入提炼输入。写入时原子重建同一 session：`cleanup_merge_root` 下通过轻量 user message 锚点挂载 active 分支的 `CompactionEntry`，分支标签格式为 `PSD M/A MM/DD HH:mm`（保证 Pi Web 分支选择器正常展示可读标签，且因 `firstKeptEntryId === compaction.id` 保持 LLM 上下文严格截断与隔离）；原 session entry tree 必须复制到 `cleanup_source_root` sibling 非 active 分支，原 JSONL 精确字节还必须进入 `cleanup_history_manifest`、`cleanup_history_source_chunk`、`cleanup_history_timeline_chunk` hidden entries。其他自动或手动压缩继续通过 `session_before_compact` 使用 Pi 当前 compaction settings。
 2. 单个明确 ID 必须使用 Pi 官方 `prepareCompaction` 和当前 compaction settings，不复制 cut-point 算法。
 3. 指定 ID 在冻结 `0600` 副本上准备 compaction；写入前必须确认源文件身份、cwd、版本和 hash 未变化。
 4. `/cleanup this` 在替换源文件前必须验证新 session 的 header、单一 merge root、active checkpoint、非 active 原始 entry tree、标题、父链、hidden archive ID、source/timeline hashes 和逐行引用；替换后必须回读复验，失败则从冻结快照恢复原字节。交互模式必须先把 runtime 切到安全 staging session，成功脱离源文件后才能替换；若首次切换被取消，源文件必须保持不变；若返回目标 session 被取消，不得把成功写入误报为 cleanup 失败，且 runtime 必须停留在 staging，避免旧父链继续写入 replacement。
@@ -51,7 +51,7 @@
 6. verifier 未通过时拒绝发布，不能降低门禁或静默降级。
 7. 输出必须原子写入并回读验证 Pi v3 header、父链、正文和 hidden canonical 数据。
 8. 任何多来源 handoff 产物必须以单一 `cleanup_merge_root` 构造真正的 Pi session tree：每个来源的完整 entry tree 复制为独立非
-   active 分支，聚合 handoff 以 native `CompactionEntry` 作为最后追加的 active checkpoint。
+   active 分支，聚合 handoff 在锚点 message 后以 native `CompactionEntry` 作为最后追加的 active checkpoint，同样提供 `PSD M/A MM/DD HH:mm` 分支标识。
 9. 来源 entry 必须重映射 ID/parentId，保持原有分支拓扑和其他字段；写后使用 `SessionManager` 验证 active context 只包含聚合
    handoff，不包含 `cleanup_source_root` 或来源消息，并保证 pi-web 自动标题流程可读取 `compactionSummary`。
 10. 初始会话名称必须取 LLM handoff 的主题字段，不得优先使用文件系统项目路径。
